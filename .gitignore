@@ -1,0 +1,26 @@
+# Secrets / environment
+.env
+.env.*
+!.env.example
+
+# Claude Code personal/local files
+CLAUDE.local.md
+.claude/settings.local.json
+
+# Python
+.venv/
+__pycache__/
+
+# Dataset artifacts (downloaded / generated, ~GBs)
+data/raw/
+data/staging/
+data/*.json
+
+# Generated doc exports (HTML/PDF rendered from docs/*.md)
+docs/export/
+
+# OS
+.DS_Store
+.prd-drift-queue/
+.claude/
+CLAUDE.md

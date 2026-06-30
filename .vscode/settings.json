@@ -1,0 +1,13 @@
+{
+  // Settings for the yzane.markdown-pdf extension (right-click → Markdown PDF: Export).
+  "markdown-pdf.outputDirectory": "docs/export",
+  "markdown-pdf.outputDirectoryRelativePathFile": false,
+  "markdown-pdf.type": ["pdf"],
+  "markdown-pdf.format": "Letter",
+  "markdown-pdf.margin.top": "18mm",
+  "markdown-pdf.margin.bottom": "18mm",
+  "markdown-pdf.margin.right": "16mm",
+  "markdown-pdf.margin.left": "16mm",
+  "markdown-pdf.displayHeaderFooter": false,
+  "markdown-pdf.highlightStyle": "github.css"
+}

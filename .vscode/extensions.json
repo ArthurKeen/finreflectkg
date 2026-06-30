@@ -1,0 +1,9 @@
+{
+  // Recommended VS Code extensions for this workspace.
+  // VS Code will prompt to install these when the folder is opened.
+  "recommendations": [
+    // Right-click a Markdown file → "Markdown PDF: Export (pdf)" (renders via Chromium).
+    // Also supports Export (html). Configured in .vscode/settings.json.
+    "yzane.markdown-pdf"
+  ]
+}
