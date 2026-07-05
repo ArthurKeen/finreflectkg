@@ -1,7 +1,8 @@
 # Multi-Distribution Plan — OneShard + SmartGraph builds of FinReflectKG
 
-**Status:** v0.2 · 2026-06-29 · **OneShard built & verified; SmartGraph design locked
-(Design 2), build pending.**
+**Status:** v0.3 · 2026-07-05 · **All three distributions built & verified —
+baseline, OneShard, and SmartGraph (`FinReflectKgSmart`, Design 2) loaded and
+validated (shard-local per-company traversals confirmed).**
 **Author:** Arthur Keen (ArangoDB).
 **Related:** [sharding-analysis.md](sharding-analysis.md) · [etl-plan.md](etl-plan.md) ·
 [load-report.md](load-report.md) · [data-analysis.md](data-analysis.md) ·
@@ -16,8 +17,8 @@ SmartGraph behaviour can be benchmarked head-to-head on the same source data:
 | DB | Distribution | Owner / use | Status |
 |---|---|---|---|
 | `FinReflectKG` (existing) | flexible db, 1 shard/collection, **not** OneShard | current POC / NL-query work | loaded, keep as-is |
-| **`FinReflectKgOneShard`** (new) | **OneShard database** (`sharding: "single"`) | OneShard performance testing | to build |
-| **`FinReflectKgSmart`** (new) | **sharded SmartGraph** (+ satellites for shared parts) | community / cluster graph | to build (needs a modeling decision — §5) |
+| **`FinReflectKgOneShard`** | **OneShard database** (`sharding: "single"`) | OneShard performance testing | **built & verified** (`scripts/build_oneshard.sh`) |
+| **`FinReflectKgSmart`** | **Disjoint SmartGraph** (Design 2: smart key `ticker`, shared concepts duplicated per company, `chunks` smart-sharded by `ticker`) | community / cluster graph | **built & verified** (`scripts/build_smart.sh`) |
 
 ### Recap of the deferred decision (yes, this is the same one)
 
@@ -350,8 +351,11 @@ adds the node-classification + edge-split logic and doubles the index build.
 
 1. ~~Parameterize pipeline (§3)~~ — **done** (env-overlay + sharding options + import override).
 2. ~~Build `FinReflectKgOneShard` (§4)~~ — **done & verified** (`scripts/build_oneshard.sh`).
-3. ~~Decide Design 2 vs B (§5.3)~~ — **done: Design 2.** Next: build `FinReflectKgSmart`
-   (new ticker-aware preprocessing → smart graph create → import → index → validate).
+3. ~~Decide Design 2 vs B (§5.3)~~ — **done: Design 2.** ~~Build `FinReflectKgSmart`~~ —
+   **done & verified 2026-07-05** (`scripts/build_smart.sh`): 6,658,668 nodes /
+   17,513,372 edges / 1,384,513 chunks; VCIs built; referential integrity clean;
+   disjoint shard-locality confirmed (per-company traversal has no `RemoteNode`, source
+   text co-located on the same shard).
 4. Re-point/duplicate the Graph Visualizer install + benchmark suite per DB if the
    visual layer is wanted (optional stage 8).
 

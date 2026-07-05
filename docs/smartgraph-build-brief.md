@@ -1,6 +1,7 @@
 # Build Brief — `FinReflectKgSmart` (Disjoint SmartGraph) · handoff for Claude Code
 
-**Status:** ready to build · 2026-06-29
+**Status:** built & verified · 2026-07-05 (`scripts/build_smart.sh`; 6,658,668 nodes /
+17,513,372 edges / 1,384,513 chunks; VCIs built; disjoint shard-locality confirmed)
 **Design:** locked — **Design 2, Disjoint SmartGraph sharded by `ticker`** (see
 [multi-distribution-plan.md](multi-distribution-plan.md) §5, esp. §5.3–§5.7).
 **Context docs to read first:** [multi-distribution-plan.md](multi-distribution-plan.md)

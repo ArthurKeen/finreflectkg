@@ -1,6 +1,6 @@
 # PRD — FinReflectKG on ArangoDB (Proof of Concept)
 
-**Status:** Draft v0.2 · 2026-06-29 (updated post-load + multi-distribution phase)
+**Status:** Draft v0.3 · 2026-07-05 (all three distributions built & verified)
 **Authors:** Arthur Keen (ArangoDB)
 **Related docs:** [data-analysis.md](data-analysis.md) · [etl-plan.md](etl-plan.md) ·
 [load-report.md](load-report.md) · [sharding-analysis.md](sharding-analysis.md) ·
@@ -10,6 +10,13 @@
 
 ## 0. Changelog
 
+- **v0.3 (2026-07-05):** **SmartGraph build complete.** `FinReflectKgSmart`
+  (Design 2, Disjoint SmartGraph by `ticker`) loaded & validated —
+  **6,658,668 nodes / 17,513,372 edges / 1,384,513 chunks**, VCIs built,
+  referential integrity clean, and a per-company traversal confirmed
+  **shard-local** (no `RemoteNode`) with its source text co-located. All three
+  distributions (baseline, OneShard, SmartGraph) are now built (G7/M6 done). The
+  interim `FinReflectKgSmartPilot` pilot database was retired.
 - **v0.2 (2026-06-29):** Full dataset loaded & validated (M3 done); corrected the
   VCI finding (VCIs accelerate **direct edge-collection queries, not pattern
   traversals** on 3.12.x cluster — see [load-report.md](load-report.md)); added the
@@ -44,7 +51,7 @@ This is a POC to load that dataset into a managed ArangoDB deployment and evalua
 | G4 | Repeatable, resumable ETL | Pipeline re-runnable end-to-end; idempotent (deterministic `_key`s, `onDuplicate` handling); single command per stage | **Done** — `scripts/rebuild_all.sh` |
 | G5 | Query-performance baseline | A benchmark suite of representative graph queries with recorded latencies (see §6) | Pending (M4) |
 | G6 | NL-query readiness | Source-text chunks stored and joinable from every edge, enabling GraphRAG / NL→AQL evaluation | In progress — chunks loaded; NL→AQL/Cypher work underway ([cypher-queries.md](cypher-queries.md)) |
-| G7 | Multiple distributions for comparative scale benchmarking | Same dataset built as a **OneShard** db (`FinReflectKgOneShard`) and a **sharded SmartGraph** db (`FinReflectKgSmart`) alongside the baseline `FinReflectKG`; sharding verified (see §4.5) | OneShard **done**; SmartGraph planned ([multi-distribution-plan.md](multi-distribution-plan.md)) |
+| G7 | Multiple distributions for comparative scale benchmarking | Same dataset built as a **OneShard** db (`FinReflectKgOneShard`) and a **sharded SmartGraph** db (`FinReflectKgSmart`) alongside the baseline `FinReflectKG`; sharding verified (see §4.5) | **Done** — OneShard and SmartGraph both built & verified ([multi-distribution-plan.md](multi-distribution-plan.md)) |
 
 ### Non-goals (this phase)
 
@@ -156,7 +163,7 @@ Full detail: [etl-plan.md](etl-plan.md).
   - `FinReflectKG` — baseline, loaded & validated. (Note: this is a single-shard
     **flexible** db, *not* a true OneShard db, despite earlier informal labelling.)
   - `FinReflectKgOneShard` — OneShard db, built & verified.
-  - `FinReflectKgSmart` — sharded SmartGraph db, planned.
+  - `FinReflectKgSmart` — Disjoint SmartGraph db (Design 2), built & verified.
   - The endpoint also hosts unrelated app collections (`aga_*`, `benchmark_*`,
     `arango_cypher_schema_cache`) added by other tooling; the POC builds keep to
     their own databases and the named graph manifest to avoid them.
@@ -180,7 +187,7 @@ canonical pipeline drives all three. Full design: [multi-distribution-plan.md](m
 |---|---|---|---|
 | `FinReflectKG` | flexible db, 1 shard/collection (not OneShard) | baseline / NL-query work | loaded |
 | `FinReflectKgOneShard` | **OneShard** db (`sharding: "single"`, all collections `distributeShardsLike` `_graphs`, co-located on one DBServer) | OneShard performance testing | **built & verified** (`scripts/build_oneshard.sh`) |
-| `FinReflectKgSmart` | **Disjoint SmartGraph** (smart key `ticker`; shared concepts duplicated per company; `chunks` smart-sharded by `ticker` for text co-location) | text-to-graph / cluster graph | design locked (Design 2), build pending |
+| `FinReflectKgSmart` | **Disjoint SmartGraph** (smart key `ticker`; shared concepts duplicated per company; `chunks` smart-sharded by `ticker` for text co-location) | text-to-graph / cluster graph | **built & verified** (`scripts/build_smart.sh`; 6.66 M nodes / 17.51 M edges, shard-local traversals confirmed) |
 
 **Constraints & decisions:**
 - OneShard's `sharding: "single"` can only be set at **database creation**, so each
@@ -206,8 +213,8 @@ for the as-loaded counts. Headline figures: **17,513,372 edges**, **3,099,773 no
 (distinct name+type pairs), **1,384,513 chunks loaded** (of 1,403,652 distinct chunk
 keys — rows with `has_context = false` carry no chunk); raw parquet 1.67 GB;
 ArangoDB footprint dominated by the `relations` collection and its two VCIs
-plus ~4 GB of deduplicated chunk text. The SmartGraph "Design 2" build (§4.5) would
-grow nodes to ~6.66 M (2.1×) via per-company concept duplication.
+plus ~4 GB of deduplicated chunk text. The SmartGraph "Design 2" build (§4.5) grew
+nodes to **6,658,668** (2.1×) via per-company concept duplication.
 
 ## 6. Benchmark sketch (G5)
 
@@ -247,7 +254,7 @@ Note: latency on the shared remote cluster is noisy (a single query has ranged
 | M3 | Bulk load into remote ArangoDB + indexes + reconciliation report | G1–G4 | **Done** ([load-report.md](load-report.md)) |
 | M4 | Benchmark suite + results | G5 (+ G7 cross-distribution) | Pending |
 | M5 | NL-query evaluation (NL→AQL and/or GraphRAG) | G6; scoped later | In progress ([cypher-queries.md](cypher-queries.md)) |
-| M6 | Multi-distribution builds (OneShard + SmartGraph) | G7 | OneShard done; SmartGraph design locked (Design 2), build pending ([multi-distribution-plan.md](multi-distribution-plan.md)) |
+| M6 | Multi-distribution builds (OneShard + SmartGraph) | G7 | **Done** — OneShard and SmartGraph both built & verified ([multi-distribution-plan.md](multi-distribution-plan.md)) |
 
 ## 8. Risks & open questions
 
