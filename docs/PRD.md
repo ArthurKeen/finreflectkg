@@ -1,6 +1,6 @@
 # PRD — FinReflectKG on ArangoDB (Proof of Concept)
 
-**Status:** Draft v0.3 · 2026-07-05 (all three distributions built & verified)
+**Status:** Draft v0.4 · 2026-07-05 (all three distributions built & verified; cross-distribution benchmarks recorded)
 **Authors:** Arthur Keen (ArangoDB)
 **Related docs:** [data-analysis.md](data-analysis.md) · [etl-plan.md](etl-plan.md) ·
 [load-report.md](load-report.md) · [sharding-analysis.md](sharding-analysis.md) ·
@@ -10,6 +10,13 @@
 
 ## 0. Changelog
 
+- **v0.4 (2026-07-05):** **Cross-distribution benchmarks complete (G5/M4 done).**
+  Ran the PRD §6 suite against all three distributions with deterministic
+  scanned-edge + explain-locality metrics ([benchmark-report.md](benchmark-report.md)).
+  Headline: Design 2's per-company concept duplication **decomposes the `net income`
+  supernode ~250×** (228.6 ms → 0.9 ms; 59,315 → 35 scanned edges) for company-scoped
+  queries, at the predicted cost of costlier global concept roll-ups (name lookup
+  returns 873 per-company copies; cross-company 2-hop pays `RemoteNode` hops).
 - **v0.3 (2026-07-05):** **SmartGraph build complete.** `FinReflectKgSmart`
   (Design 2, Disjoint SmartGraph by `ticker`) loaded & validated —
   **6,658,668 nodes / 17,513,372 edges / 1,384,513 chunks**, VCIs built,
@@ -49,7 +56,7 @@ This is a POC to load that dataset into a managed ArangoDB deployment and evalua
 | G2 | LPG data model with Neo4j-aligned terminology | One `Node` document collection, one `relations` edge collection; edges carry `type`, `_fromType`, `_toType` | **Done** |
 | G3 | Vertex-centric indexes on edges | Persistent indexes on `(_from, type, _toType)` and `(_to, type, _fromType)`; AQL profiles show index use on **direct edge-collection queries** (see §4.2 note) | **Done** (with refined finding) |
 | G4 | Repeatable, resumable ETL | Pipeline re-runnable end-to-end; idempotent (deterministic `_key`s, `onDuplicate` handling); single command per stage | **Done** — `scripts/rebuild_all.sh` |
-| G5 | Query-performance baseline | A benchmark suite of representative graph queries with recorded latencies (see §6) | Pending (M4) |
+| G5 | Query-performance baseline | A benchmark suite of representative graph queries with recorded latencies (see §6) | **Done** — suite ([scripts/benchmark.py](../scripts/benchmark.py)) run across all three distributions; deterministic scanned-edge + explain-locality metrics recorded ([benchmark-report.md](benchmark-report.md)) |
 | G6 | NL-query readiness | Source-text chunks stored and joinable from every edge, enabling GraphRAG / NL→AQL evaluation | In progress — chunks loaded; NL→AQL/Cypher work underway ([cypher-queries.md](cypher-queries.md)) |
 | G7 | Multiple distributions for comparative scale benchmarking | Same dataset built as a **OneShard** db (`FinReflectKgOneShard`) and a **sharded SmartGraph** db (`FinReflectKgSmart`) alongside the baseline `FinReflectKG`; sharding verified (see §4.5) | **Done** — OneShard and SmartGraph both built & verified ([multi-distribution-plan.md](multi-distribution-plan.md)) |
 
@@ -252,7 +259,7 @@ Note: latency on the shared remote cluster is noisy (a single query has ranged
 | M1 | PRD + data analysis + ETL plan reviewed | this document set | Done |
 | M2 | Download + preprocess pipeline producing JSONL | local, repeatable | Done |
 | M3 | Bulk load into remote ArangoDB + indexes + reconciliation report | G1–G4 | **Done** ([load-report.md](load-report.md)) |
-| M4 | Benchmark suite + results | G5 (+ G7 cross-distribution) | Pending |
+| M4 | Benchmark suite + results | G5 (+ G7 cross-distribution) | **Done** — cross-distribution suite + results ([benchmark-report.md](benchmark-report.md)); SmartGraph decomposes the `net income` supernode ~250× on per-company queries; latency indicative on the shared cluster |
 | M5 | NL-query evaluation (NL→AQL and/or GraphRAG) | G6; scoped later | In progress ([cypher-queries.md](cypher-queries.md)) |
 | M6 | Multi-distribution builds (OneShard + SmartGraph) | G7 | **Done** — OneShard and SmartGraph both built & verified ([multi-distribution-plan.md](multi-distribution-plan.md)) |
 
