@@ -136,7 +136,8 @@ See [`docs/multi-distribution-plan.md`](docs/multi-distribution-plan.md) for the
 | [`docs/sharding-analysis.md`](docs/sharding-analysis.md) | Sharding analysis |
 | [`docs/multi-distribution-plan.md`](docs/multi-distribution-plan.md) | OneShard + SmartGraph distributions |
 | [`docs/schema-mapping.md`](docs/schema-mapping.md) | Source → graph schema mapping |
-| [`docs/cypher-queries.md`](docs/cypher-queries.md) | Query migration / NL→AQL work |
+| [`docs/cypher-queries.md`](docs/cypher-queries.md) | Query migration / NL→AQL gold set |
+| [`docs/nl-graphrag.md`](docs/nl-graphrag.md) | NL→AQL + GraphRAG evaluation harness (M5) |
 | [`docs/benchmark-report.md`](docs/benchmark-report.md) | Benchmark results |
 
 ---

@@ -9,6 +9,7 @@ CLAUDE.local.md
 
 # Python
 .venv/
+.venv311/
 __pycache__/
 
 # Dataset artifacts (downloaded / generated, ~GBs)
