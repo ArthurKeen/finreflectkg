@@ -1,6 +1,6 @@
 # PRD — FinReflectKG on ArangoDB (Proof of Concept)
 
-**Status:** Draft v0.7 · 2026-07-07 (arango-cypher-py Cypher→AQL integration built — §4.6)
+**Status:** Draft v0.8 · 2026-07-07 (arango-cypher-py Cypher→AQL: upstream vocab fix verified, 14/22 — §4.6)
 **Authors:** Arthur Keen (ArangoDB)
 **Related docs:** [data-analysis.md](data-analysis.md) · [etl-plan.md](etl-plan.md) ·
 [load-report.md](load-report.md) · [sharding-analysis.md](sharding-analysis.md) ·
@@ -11,6 +11,12 @@
 
 ## 0. Changelog
 
+- **v0.8 (2026-07-07):** **Upstream vocabulary fix verified.** After the `arango-cypher-py`
+  resolver was made case/normalization-insensitive, the Cypher→AQL retest went
+  **3/22 → 14/22 transpile (7/22 execute)**. Updated the bug report with the retest and two
+  newly-pinpointed upstream transpile-correctness bugs (invalid AQL: `collection not found: loc`;
+  `variable 'v' assigned multiple times`), plus that `reduce()` still errors in the installed tree
+  and the `ORG_REG` entity-cap remains (analyzer). Added a `request_timeout` to the eval harness.
 - **v0.7 (2026-07-07):** **Built the `arango-cypher-py` integration**
   ([scripts/cypher_eval.py](../scripts/cypher_eval.py), in a dedicated py3.11 `.venv311`):
   acquires a live `MappingBundle` (20 entities / 200 relationship types) and transpiles
@@ -87,7 +93,7 @@ This is a POC to load that dataset into a managed ArangoDB deployment and evalua
 | G3 | Vertex-centric indexes on edges | Persistent indexes on `(_from, type, _toType)` and `(_to, type, _fromType)`; AQL profiles show index use on **direct edge-collection queries** (see §4.2 note) | **Done** (with refined finding) |
 | G4 | Repeatable, resumable ETL | Pipeline re-runnable end-to-end; idempotent (deterministic `_key`s, `onDuplicate` handling); single command per stage | **Done** — `scripts/rebuild_all.sh` |
 | G5 | Query-performance baseline | A benchmark suite of representative graph queries with recorded latencies (see §6) | **Done** — suite ([scripts/benchmark.py](../scripts/benchmark.py)) run across all three distributions; deterministic scanned-edge + explain-locality metrics recorded ([benchmark-report.md](benchmark-report.md)) |
-| G6 | NL-query readiness | Source-text chunks joinable from every edge; **Cypher→AQL / NL→Cypher via `arango-cypher-py`** (§4.6) + GraphRAG grounding | **Partial** — `arango-cypher-py` Cypher→AQL integration built & run ([scripts/cypher_eval.py](../scripts/cypher_eval.py); 3/22 gold Cypher transpile+execute as-is — vocabulary alignment is the next step); GraphRAG retrieval verified on `FinReflectKgSmart` (24/24 grounded, [scripts/graphrag.py](../scripts/graphrag.py)); gold-set AQL runner 21/22 ([nl-graphrag.md](nl-graphrag.md)) |
+| G6 | NL-query readiness | Source-text chunks joinable from every edge; **Cypher→AQL / NL→Cypher via `arango-cypher-py`** (§4.6) + GraphRAG grounding | **Partial** — `arango-cypher-py` Cypher→AQL integration built & run ([scripts/cypher_eval.py](../scripts/cypher_eval.py)); a filed upstream resolver fix took transpile **3/22 → 14/22** (7/22 execute), remaining items upstream; GraphRAG retrieval verified on `FinReflectKgSmart` (24/24 grounded, [scripts/graphrag.py](../scripts/graphrag.py)); gold-set AQL runner 21/22 ([nl-graphrag.md](nl-graphrag.md)) |
 | G7 | Multiple distributions for comparative scale benchmarking | Same dataset built as a **OneShard** db (`FinReflectKgOneShard`) and a **sharded SmartGraph** db (`FinReflectKgSmart`) alongside the baseline `FinReflectKG`; sharding verified (see §4.5) | **Done** — OneShard and SmartGraph both built & verified ([multi-distribution-plan.md](multi-distribution-plan.md)) |
 
 ### Non-goals (this phase)
@@ -316,7 +322,7 @@ Note: latency on the shared remote cluster is noisy (a single query has ranged
 | M2 | Download + preprocess pipeline producing JSONL | local, repeatable | Done |
 | M3 | Bulk load into remote ArangoDB + indexes + reconciliation report | G1–G4 | **Done** ([load-report.md](load-report.md)) |
 | M4 | Benchmark suite + results | G5 (+ G7 cross-distribution) | **Done** — cross-distribution suite + results ([benchmark-report.md](benchmark-report.md)); SmartGraph decomposes the `net income` supernode ~250× on per-company queries; latency indicative on the shared cluster |
-| M5 | NL-query evaluation (Cypher→AQL / NL→Cypher via `arango-cypher-py` + GraphRAG) | G6, §4.6 | In progress — `arango-cypher-py` integration **built & run** ([scripts/cypher_eval.py](../scripts/cypher_eval.py)): 3/22 gold Cypher transpile+execute. The 19 failures are an **upstream vocabulary-resolution gap** (exact-match resolver + lossy label normalization + top-N cap in `arango-cypher-py`), **filed as a bug report there** — FinReflectKG will not rewrite its gold Cypher; fix is upstream and/or via the schema-aware `nl2cypher` front-end. GraphRAG retrieval/grounding done; bespoke `nl2aql.py` removed ([nl-graphrag.md](nl-graphrag.md)) |
+| M5 | NL-query evaluation (Cypher→AQL / NL→Cypher via `arango-cypher-py` + GraphRAG) | G6, §4.6 | In progress — `arango-cypher-py` integration **built & run** ([scripts/cypher_eval.py](../scripts/cypher_eval.py)). Filed the vocabulary gap upstream; the resolver fix landed and retest went **3/22 → 14/22** transpile (7/22 execute). Remaining are upstream: two invalid-AQL transpile bugs (#8/#16), `reduce()`, and the analyzer entity-cap (`ORG_REG`); plus data-vocabulary caveats (`:RISK`/`:METADATA` absent). GraphRAG retrieval/grounding done; `nl2aql.py` removed; NL→Cypher next ([nl-graphrag.md](nl-graphrag.md)) |
 | M6 | Multi-distribution builds (OneShard + SmartGraph) | G7 | **Done** — OneShard and SmartGraph both built & verified ([multi-distribution-plan.md](multi-distribution-plan.md)) |
 
 ## 8. Risks & open questions

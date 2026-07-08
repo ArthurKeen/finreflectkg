@@ -2,9 +2,10 @@
 
 **Status:** v0.3 · 2026-07-07 · GraphRAG retrieval/grounding verified; **required
 [`arango-cypher-py`](https://github.com/arango-solutions/arango-cypher-py) Cypher→AQL
-integration built** ([`scripts/cypher_eval.py`](../scripts/cypher_eval.py)) and run
-(3/22 as-is — vocabulary-alignment finding below). The bespoke `nl2aql.py` prototype
-was **removed**. NL→Cypher and answer synthesis remain pending.
+integration built** ([`scripts/cypher_eval.py`](../scripts/cypher_eval.py)) and run —
+the vocabulary gap was filed against the library and an upstream resolver fix took it
+from **3/22 → 14/22** transpile (7/22 execute); remaining items are upstream. The
+bespoke `nl2aql.py` prototype was **removed**. NL→Cypher and answer synthesis pending.
 **Related:** [cypher-queries.md](cypher-queries.md) (the 22-query gold set) ·
 [PRD.md](PRD.md) §4.6 · [benchmark-report.md](benchmark-report.md)
 
@@ -95,40 +96,46 @@ prints the assembled prompt, and `graphrag.py` prints the assembled grounded con
 ## Cypher→AQL via arango-cypher-py (2026-07-07)
 
 `scripts/cypher_eval.py` against `FinReflectKG` (graph-scoped mapping: 20 entities,
-200 relationship types): **3/22 gold Cypher queries transpile + execute** as written
-(#1 entity-type distribution, #2 relationship-type distribution, #15 Apple's related
-orgs). The transpiler itself works; the other 19 fail for **schema-vocabulary**
-reasons, which is the key integration finding:
+200 relationship types). **The vocabulary resolution is `arango-cypher-py`'s
+responsibility, not FinReflectKG's — we do not rewrite the gold Cypher.** That was
+filed as a bug report against the library
+(`arango-cypher-py/docs/finreflectkg-cypher-vocabulary-bug-report.md`); an upstream fix
+followed and was retested here.
 
-- **Relationship case/lemma** — the gold Cypher uses the original Neo4j spelling
-  (`Has_Stake_In`, `Operates_In`, `Depends_On`, `Negatively_Impacts`), but the
-  schema-derived mapping exposes the graph's actual lowercase-lemmatized values
-  (`has_stake_in`, `operates_in`, …). Result: `MAPPING_NOT_FOUND: No relationship
-  mapping for: Has_Stake_In`.
-- **Entity-label normalization + top-N cap** — labels come back underscore-stripped
-  and uppercased (`FIN_METRIC` → `FINMETRIC`, `RISK_FACTOR` → `RISKFACTOR`), and the
-  open-vocab mapping keeps the **top 20** entity labels by volume, so `ORG_REG`
-  (rank ~24) is absent. Gold queries using `:FIN_METRIC` / `:ORG_REG` miss.
-- **Transpiler coverage gap** — query 22 uses `reduce(...)`, unsupported:
-  `CYPHER_SYNTAX_ERROR ... no viable alternative at input 'reduce'`.
+| Run | Transpile | Execute |
+|---|---|---|
+| Initial (exact-match resolver) | 3/22 | 3/22 |
+| After upstream resolver fix | **14/22** | **7/22** |
 
-**Responsibility — this is an `arango-cypher-py` gap, not a FinReflectKG one.** The
-transpiler's `MappingResolver` (`arango_query_core/mapping.py`) resolves labels and
-relationship types by **exact dict-key match** — no case-fold, no lemma/underscore
-normalization, no alias/synonym layer — and the analyzer export **renames** entity
-labels lossily (`FIN_METRIC` → `FINMETRIC`) and caps them to the top-20. Bridging the
-Cypher vocabulary to the graph's is the transpiler's job, so **FinReflectKG will not
-rewrite its gold Cypher to the mapping's internal spellings.** The fix belongs
-upstream (resolver normalization + alias + label fidelity) and/or in the schema-aware
-`nl2cypher` front-end, which emits mapping-correct labels by construction.
+**Fixed upstream** — the resolver now does case/underscore-insensitive matching, so
+`Has_Stake_In` → `has_stake_in` and `FIN_METRIC` → `FINMETRIC` resolve (7 more queries
+transpile). Remaining failures, by owner:
 
-Filed as a bug report / feature request against the library:
-`arango-cypher-py/docs/finreflectkg-cypher-vocabulary-bug-report.md`. Raw results:
-`data/cypher_eval_results.json`. Next step here is to drive the eval through
-`nl2cypher` once available, rather than hand-writing Cypher.
+- **`arango-cypher-py` — still open:**
+  - **Invalid AQL generated** (surfaced once vocabulary resolved): #8 →
+    `collection or view not found: loc`; #16 (3-hop) →
+    `variable 'v' is assigned multiple times` (var-length expansion reassigns the
+    traversal variable and references undefined edge vars).
+  - **`reduce(...)`** (#22) still returns `CYPHER_SYNTAX_ERROR` in the installed tree
+    (an upstream reduce fix is described but its regenerated parser isn't active here).
+  - **Efficiency:** #5/#9/#13/#18/#19 transpile to valid but slow AQL (killed at the
+    runtime cap; the hand-written equivalents run in ms) — the generated AQL doesn't
+    engage the vertex-centric fast path.
+- **`arangodb-schema-analyzer` — upstream:** the top-20 entity cap drops `ORG_REG`
+  (#12/#14/#17 → `MAPPING_NOT_FOUND: ORG_REG`).
+- **Not a library issue (gold-set/data vocabulary):** #10/#11/#20 use `:RISK` and #21
+  uses `:METADATA` — labels that do not exist in the FinReflectKG dataset (documented
+  caveats in [cypher-queries.md](cypher-queries.md)).
 
-## Pending (needs a provider key)
+Raw results: `data/cypher_eval_results.json`. Next step: drive the eval through the
+schema-aware `nl2cypher` front-end (emits mapping-correct labels) rather than
+hand-written Cypher.
 
-- NL→AQL generation accuracy (`nl2aql.py --eval`) scored across the gold set.
-- GraphRAG answer synthesis quality (cited answers) — a small rubric over a handful
-  of questions.
+## Pending
+
+- **NL→Cypher** via `arango_cypher.nl2cypher` (needs a provider key) — the schema-aware
+  front-end that emits mapping-correct Cypher, then transpile+execute via `cypher_eval`.
+- **GraphRAG answer synthesis** quality (cited answers) — a small rubric over a handful
+  of questions (needs a provider key).
+- Re-run `cypher_eval.py` once the upstream invalid-AQL (#8/#16), `reduce()`, and
+  entity-cap (`ORG_REG`) items land.

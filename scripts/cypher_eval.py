@@ -63,12 +63,14 @@ def _load_env(path=ROOT / ".env"):
     return env
 
 
-def connect(env, db_name):
+def connect(env, db_name, timeout=180):
     from arango import ArangoClient
 
     endpoint = env["ARANGO_ENDPOINT"].rstrip("/")
     verify = env.get("ARANGO_VERIFY_SSL", "true").lower() == "true"
-    client = ArangoClient(hosts=endpoint, verify_override=verify)
+    # request_timeout must exceed the AQL maxRuntime, else the HTTP socket read
+    # times out (60s default) before the server-side query limit fires.
+    client = ArangoClient(hosts=endpoint, verify_override=verify, request_timeout=timeout)
     return client.db(db_name, username=env.get("ARANGO_USER", "root"),
                      password=env.get("ARANGO_PASSWORD", ""), verify=True)
 
@@ -98,7 +100,7 @@ def main():
     if args.only:
         gold = [g for g in gold if g["n"] in set(args.only)]
 
-    db = connect(env, db_name)
+    db = connect(env, db_name, timeout=args.max_runtime + 30)
     print(f"db={db_name}  graph={graph}  transpiler=arango-cypher-py\n"
           f"acquiring schema mapping (analyzer + {get_mapping.__module__})...")
     mapping = get_mapping(db, graph_name=graph, force_refresh=args.refresh_schema)
