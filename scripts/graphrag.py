@@ -101,6 +101,20 @@ def format_context(facts):
     return "\n".join(lines)
 
 
+SYNTH_SYSTEM = ("You answer questions about companies using ONLY the provided knowledge-graph "
+                "facts, each with a source-text snippet. Cite facts by their [n] index. If the "
+                "facts don't answer the question, say so.")
+
+
+def synthesize(question, context, max_tokens=800):
+    """LLM answer for `question`, grounded in the formatted GraphRAG `context`, citing facts [n].
+
+    Requires a configured LLM (llm.available()); callers handle the dry-run case.
+    """
+    user = f"Question: {question}\n\nKnowledge-graph facts:\n{context}\n\nAnswer (with [n] citations):"
+    return llm.complete(SYNTH_SYSTEM, user, max_tokens=max_tokens)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("-q", "--question", required=True)
@@ -142,12 +156,8 @@ def main():
         print(f"\nwrote {out}")
         return
 
-    system = ("You answer questions about companies using ONLY the provided knowledge-graph "
-              "facts, each with a source-text snippet. Cite facts by their [n] index. If the "
-              "facts don't answer the question, say so.")
-    user = f"Question: {args.question}\n\nKnowledge-graph facts:\n{context}\n\nAnswer (with [n] citations):"
     print(f"[{llm.provider()}:{llm.model()}] synthesizing...\n")
-    print("----- answer -----\n" + llm.complete(system, user, max_tokens=800))
+    print("----- answer -----\n" + synthesize(args.question, context))
 
 
 if __name__ == "__main__":
