@@ -184,6 +184,19 @@ node/relationship vocabulary:
   for NL queries) and `Node(type)`.
 - Optional (benchmark-driven): `relations(ticker, year)` for temporal/company
   slicing.
+- **Label-rooted access path (added 2026-07-22, M5/G6):** persistent indexes
+  `relations(type, _fromType, _toType)` (`vci_type_fromtype_totype`) and
+  `relations(type, _toType, _fromType)` (`vci_type_totype_fromtype`). The two VCIs
+  above are **node-anchored** (leading `_from`/`_to`), so **label-wide** aggregations
+  ("all `:ORG` operating in > N `:GPE`" — no bound start node) engage no index and scan
+  the full edge collection. These `type`-leading indexes prune such filters to the
+  matching slice — e.g. `operates_in`/ORG/GPE = 313,407 of 17.5 M edges (1.79%): the
+  direct-edge form's estimated cost drops **119,966,595 → 465** and it runs ~1.9 s vs.
+  timing out at the 90 s cap. As with the VCIs, only **direct edge-collection queries**
+  use them (pattern traversals do not — see the note below); the `arango-cypher-py`
+  transpiler must emit direct-edge single-hop AQL to benefit (filed upstream —
+  [nl-graphrag.md](nl-graphrag.md) §Pending, and
+  `arango-cypher-py/docs/finreflectkg-aql-codegen-and-access-path-report.md`).
 - Indexes are created **after** bulk load (faster than maintaining them during
   import).
 
