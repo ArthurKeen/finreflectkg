@@ -1,15 +1,11 @@
 {
   "mcpServers": {
     "finreflectkg-mcp": {
-      "command": "poetry",
-      "args": ["run", "python", "main.py"],
-      "cwd": "/Users/arthurkeen/code/arango-solutions-mcp-server",
-      "env": {
-        "ARANGO_HOSTS": "${ARANGO_ENDPOINT}",
-        "ARANGO_ROOT_USERNAME": "${ARANGO_USER}",
-        "ARANGO_ROOT_PASSWORD": "${ARANGO_PASSWORD}",
-        "ARANGO_DEFAULT_DB_NAME": "${ARANGO_DB:-FinReflectKG}"
-      }
+      "command": "bash",
+      "args": [
+        "-c",
+        "cd /Users/arthurkeen/code/FinReflectKG && set -a && . ./.env && set +a && export ARANGO_HOSTS=\"$ARANGO_ENDPOINT\" ARANGO_ROOT_USERNAME=\"$ARANGO_USER\" ARANGO_ROOT_PASSWORD=\"$ARANGO_PASSWORD\" ARANGO_DEFAULT_DB_NAME=\"${ARANGO_DB:-FinReflectKG}\" && cd /Users/arthurkeen/code/arango-solutions-mcp-server && exec .venv/bin/python main.py"
+      ]
     }
   }
 }
