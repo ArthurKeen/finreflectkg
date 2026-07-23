@@ -39,7 +39,6 @@ vector search**.
 |---|---|---|
 | [`scripts/nl_eval.py`](../scripts/nl_eval.py) | Parse the 22 curated NL/Cypher/AQL triplets from `cypher-queries.md` and execute each reference AQL against a db (the "gold set" / readiness check). | no |
 | [`scripts/llm.py`](../scripts/llm.py) | Pluggable LLM helper — Anthropic or OpenAI via HTTP, provider/keys from env; degrades to dry-run when unset. | — |
-| [`scripts/nl2aql.py`](../scripts/nl2aql.py) | **Superseded** (see §4.6): bespoke NL→AQL prompt with live schema + few-shot. Retained only as a schema-prompt experiment; the required path is `arango-cypher-py`. | to generate |
 | [`scripts/cypher_eval.py`](../scripts/cypher_eval.py) | **Required integration.** Acquires a `MappingBundle` via `arango_cypher.schema_acquire.get_mapping(db, graph_name=…)`, transpiles the **hand-written** gold-set Cypher with `arango_cypher.translate`, executes, records results. Runs under `.venv311`. | no (transpiler is deterministic) |
 | [`scripts/nl2cypher_eval.py`](../scripts/nl2cypher_eval.py) | **NL→Cypher front-end.** Drives the **NL question** through `arango_cypher.nl2cypher.nl_to_cypher` (schema mapping + LLM provider) → Cypher → `translate` → AQL → execute. Constructs the provider explicitly (Anthropic/OpenAI/OpenRouter) from `.env`. Records generated Cypher for label-correctness inspection. Runs under `.venv311`. | yes (generation) |
 | [`scripts/gold.py`](../scripts/gold.py) | Dependency-free parser for the 22-query gold set (shared by `nl_eval.py`, `cypher_eval.py`, `nl2cypher_eval.py`). | no |
@@ -71,8 +70,10 @@ LLM_PROVIDER=anthropic         # or openai; auto-detected from whichever key is 
 ANTHROPIC_API_KEY=...          # or OPENAI_API_KEY=...
 ```
 
-Without a key, every script still runs: `nl_eval.py` fully, `nl2aql.py --show-prompt`
-prints the assembled prompt, and `graphrag.py` prints the assembled grounded context.
+Without a key, `nl_eval.py` and `cypher_eval.py` run fully (both are deterministic —
+no LLM), and `graphrag.py` prints the assembled grounded context (dry-run). The
+`nl2cypher_eval.py` front-end and `graphrag_rubric.py` need a key (they generate/
+synthesize with the LLM).
 
 ## Usage
 
@@ -80,9 +81,12 @@ prints the assembled prompt, and `graphrag.py` prints the assembled grounded con
 # Gold-set readiness (baseline, where the reference AQL is written)
 .venv/bin/python scripts/nl_eval.py
 
-# NL -> AQL (dry-run prompt without a key; generate + execute with one)
-.venv/bin/python scripts/nl2aql.py -q "Which orgs operate in over 3 locations?"
-.venv/bin/python scripts/nl2aql.py --eval --only 5 12 14      # score vs gold (needs key)
+# Cypher->AQL: transpile the hand-written gold Cypher (deterministic, no key)
+.venv311/bin/python scripts/cypher_eval.py --db FinReflectKG --graph FinReflectKG
+
+# NL->Cypher front-end: NL -> nl_to_cypher -> translate -> execute (needs key)
+.venv311/bin/python scripts/nl2cypher_eval.py --db FinReflectKG --graph FinReflectKG
+.venv311/bin/python scripts/nl2cypher_eval.py --only 5 12 14   # subset
 
 # GraphRAG on the SmartGraph (text co-located per company)
 .venv/bin/python scripts/graphrag.py -q "Where does Apple operate?" --entity aapl
