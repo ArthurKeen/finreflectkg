@@ -1,132 +1,115 @@
 # Benchmark Report — FinReflectKG on ArangoDB
 
-**Status:** v2.0 · 2026-07-05 · **cross-distribution** (baseline + OneShard + SmartGraph);
-the v1.0 single-shard baseline is retained below unchanged.
+**Status:** v3.0 · 2026-07-23 · **cross-distribution** (baseline + OneShard + SmartGraph),
+now with **Class 8 — label-rooted aggregations** enabled by the type-leading indexes
+added 2026-07-22. All three distributions carry an identical index set (§4.5 parity).
 **Suite:** [scripts/benchmark.py](../scripts/benchmark.py) (multi-db + explain-locality) ·
-raw: `data/benchmark_cross.json` (cross-distribution), `data/benchmark_results.json` (single-db)
-**Related:** [load-report.md](load-report.md) ·
-[multi-distribution-plan.md](multi-distribution-plan.md) · [PRD.md](PRD.md) §6
+raw: `data/benchmark_cross.json`
+**Related:** [load-report.md](load-report.md) · [PRD.md](PRD.md) §4.2, §6 ·
+[multi-distribution-plan.md](multi-distribution-plan.md) · [nl-graphrag.md](nl-graphrag.md)
 
 ## Method
 
-Each query: 1 warmup + 7 timed iterations. We report **min** (best-case server
-time, least contended) and **median** latency, plus the **deterministic profile
-counters** — `scannedIndex`, `scannedFull`, `filtered` — which are the stable
-signal for index effectiveness regardless of cluster contention. Typed 1-hop
-queries use **direct edge-collection queries** (the access path that uses the
-VCIs; pattern traversals use the generic edge index — see
-[load-report.md](load-report.md)).
+Each query: 1 warmup + 7 timed iterations; we report **median** latency plus the
+**deterministic profile counters** (`scannedIndex` / `scannedFull` / `filtered`) and
+**explain locality** (`RemoteNode` = cross-DBServer hops). Latency on the shared remote
+cluster is noisy (a single query has ranged 0.2–20 s), so the scanned-edge counts and
+`RemoteNode` counts are the portable signal; treat wall-clock as *indicative*. Typed
+1-hop queries (2–4a, 8) are written as **direct edge-collection queries** — the access
+path that engages the vertex-centric / type-leading indexes (pattern traversals use the
+generic edge index; see [load-report.md](load-report.md)).
 
-## Results
+**Indexes on `relations` (identical across all three DBs):** `edge(_from,_to)`,
+node-anchored VCIs `vci_from_type_totype(_from,type,_toType)` /
+`vci_to_type_fromtype(_to,type,_fromType)`, `rel_ticker_year(ticker,year)`, and the
+type-leading `vci_type_fromtype_totype(type,_fromType,_toType)` /
+`vci_type_totype_fromtype(type,_toType,_fromType)`.
 
-| # | Query | min ms | med ms | scanIdx | scanFull | filtered | index |
-|---|-------|-------:|-------:|--------:|---------:|---------:|-------|
-| 1 | node point lookup by `name` | 0.5 | 0.8 | 28 | 0 | 0 | `node_name` |
-| 2 | 1-hop typed OUT (`operates_in`→GPE) | 13.1 | 15.9 | 6,290 | 0 | 0 | `vci_from_type_totype` |
-| 3 | reverse typed IN (who `has_stake_in` X) | 13.4 | 14.7 | 2,882 | 0 | 0 | `vci_to_type_fromtype` |
-| 4a | supernode **pruned** (`net income`, VCI) | 179.5 | 184.8 | 59,315 | 0 | 0 | `vci_to_type_fromtype` |
-| 4b | supernode **unpruned** (traversal) | 370.2 | 410.3 | 99,295 | 0 | 0 | `edge` |
-| 5 | 2-hop (company→metric→peers) | 23.9 | 29.2 | 2,747 | 0 | 158 | traversal |
-| 6 | temporal slice (`ticker`+year range) | 21.5 | 21.7 | 10,385 | 0 | 0 | `rel_ticker_year` |
-| 7 | NL-grounding (edge→`chunks` text) | 4.0 | 5.2 | 20 | 0 | 0 | edge + chunk PK |
+## Results — cross-distribution (median ms / `scannedIndex` / `RemoteNode`)
+
+Entities are **discovered per database** because the SmartGraph rewrites keys with a
+`ticker` prefix and duplicates shared concepts per company, so a "supernode" on the
+smart db is a *specific company's copy*, not the single global one.
+
+| # | Query | class | Baseline | OneShard | SmartGraph |
+|---|-------|-------|----------|----------|------------|
+| 1 | point lookup by `name` | lookup | 0.6ms / 28 / r1 | 0.6ms / 28 / r1 | 4.0ms / **873** / r1 |
+| 2 | 1-hop typed OUT (`operates_in`→GPE) | VCI (from) | 13.7ms / 6,290 / r1 | 14.3ms / 6,290 / r1 | 14.6ms / 6,290 / r1 |
+| 3 | reverse typed IN (`has_stake_in`) | VCI (to) | 14.8ms / 2,882 / r1 | 14.7ms / 2,882 / r1 | **0.5ms / 7** / r1 |
+| 4a | supernode **pruned** (`net income`) | VCI (to) | 200.3ms / 59,315 / r1 | 201.5ms / 59,315 / r1 | **0.9ms / 77** / r1 |
+| 4b | supernode **unpruned** (traversal) | edge idx | 404.0ms / 99,295 / r0 | 361.7ms / 99,295 / r1 | **1.4ms / 136** / r2 |
+| 5 | 2-hop (company→metric→peers) | traversal | 23.7ms / 2,747 / r0 | **2.0ms** / 2,026 / r1 | 7.5ms / 1,099 / **r4** |
+| 6 | temporal slice (`ticker`+year) | rel_ticker_year | 17.9ms / 10,385 / r1 | 17.4ms / 10,385 / r1 | 0.4ms / 0 / r1 † |
+| 7 | NL-grounding (edge→`chunks`) | edge + PK | 4.9ms / 20 / r1 | **0.8ms** / 20 / r1 | 4.4ms / 20 / r1 |
+| 8a | label agg: orgs by #GPE (`operates_in`) | **type idx (from)** | 710ms / 313,407 / r1 | 705ms / 313,407 / r1 | 602ms / 313,407 / r1 |
+| 8b | label agg: GPEs by #org (`operates_in` rev) | **type idx (to)** | 737ms / 313,407 / r1 | 735ms / 313,407 / r1 | 726ms / 313,407 / r1 |
+| 8c | label agg: orgs in litigation (`involved_in`) | **type idx (from)** | 20.5ms / 5,780 / r1 | 20.3ms / 5,780 / r1 | 19.4ms / 5,780 / r1 |
+
+`scannedFull = 0` on every index-backed query (1–4a, 6, 8) across all three DBs.
 
 ## Findings
 
-1. **The VCIs deliver perfect narrowing.** Every typed query (2, 3, 4a, 6) shows
-   `filtered = 0` and `scannedFull = 0` — the index returns exactly the matching
-   edges with zero wasted scans and zero collection scans. This is the core
-   result the model was designed for.
+1. **The VCIs narrow perfectly** (queries 2, 3, 4a, 6): the index returns exactly the
+   matching edges — `scannedFull = 0`, `filtered = 0`. Core result the model was built for.
 
-2. **Supernode pruning is the headline win (4a vs 4b).** On `net income`
-   (in-degree ~99 K), the **VCI-pruned direct query scans 59,315 edges in
-   ~180 ms**, while the **unpruned pattern traversal scans all 99,295 in
-   ~400 ms** — ~40% fewer edges and ~2.2× faster. This is exactly the case the
-   `(_to, type, _fromType)` index was built for, and it validates writing typed
-   1-hop queries as direct edge queries rather than filtered traversals.
+2. **SmartGraph decomposes supernodes** (4a/4b). Design 2 duplicates each shared concept
+   per company, so a per-company query scans **77–136 edges instead of 59 K–99 K**: 4a
+   drops **200.3 ms → 0.9 ms** and 4b **404.0 ms → 1.4 ms**. Company-scoped analytics never
+   touch other companies' data. Reverse-typed (3) similarly drops to **0.5 ms / 7 edges**.
 
-3. **Everything is index-backed.** No query touches a full collection scan
-   (`scannedFull = 0` throughout), including the temporal slice and the
-   NL-grounding chunk join.
+3. **NEW — Class 8 label-rooted aggregations are now feasible.** "All `:ORG` that …"
+   has no bound start node, so the node-anchored VCIs can't serve it; before the
+   type-leading indexes such queries scanned the full 17.5 M-edge collection and **timed
+   out**. The `type`-leading indexes prune to the matching slice: **8c** ("orgs involved in
+   litigation", 5,780 edges = 0.03 %) runs in **~20 ms**; **8a/8b** (313,407 edges = 1.79 %)
+   in **~0.7 s**. For contrast, the *pattern-traversal* form of 8c (rooted at all 22,640
+   `:ORG` nodes) **times out at 60 s** — the type-index + direct-edge query is a >2,000×
+   improvement on that access pattern.
 
-4. **NL-grounding is cheap.** Joining typed edges to their source-text chunk
-   (the GraphRAG retrieval primitive) is ~5 ms for a 20-edge fan-out — the
-   chunk dedup + primary-key lookup design pays off.
+4. **Class 8 is placement-insensitive.** `scannedIndex` is identical across all three DBs
+   (313,407 for 8a/8b, 5,780 for 8c) and latency is within noise — because Design 2
+   duplicates *nodes* but **not edges**, so the type-index prunes the same edge slice
+   regardless of placement. Label-wide aggregation is an edge-collection scan, not a
+   sharded traversal.
 
-5. **Latency was stable this run** (point lookup sub-ms, typed 1-hop ~13 ms,
-   supernode ~185 ms) — unlike an earlier ad-hoc probe that ranged 0.2–20 s on
-   the same query. Treat absolute latencies as indicative of a *single-server*,
-   variably-loaded shared cluster; the scanned-edge counts are the portable
-   metric. A dedicated quiescent window is needed for publishable latency
-   numbers.
+5. **Cost scales with slice cardinality, not index quality.** All Class 8 queries are
+   index-backed (`scannedFull = 0`); the time is the aggregation volume: 8c (5.8 K edges)
+   ~20 ms, 8a/8b (313 K) ~0.7 s, and the dominant `discloses`/ORG/`FIN_METRIC` slice
+   (5.87 M edges, measured separately) ~11 s. Very large slices want a pre-aggregated
+   rollup, not a bigger index.
+
+6. **OneShard co-locates multi-hop execution.** 2-hop (5) **23.7 ms → 2.0 ms** and the
+   NL-grounding join (7) **4.9 ms → 0.8 ms**, with the same global 1-shard graph
+   (identical scan counts). The unpruned supernode traversal (4b) also improves
+   **404 → 362 ms**.
+
+7. **The documented SmartGraph trade-off shows up exactly where predicted.** *Global*
+   concept access costs more: a `name` lookup for a shared concept returns **873
+   per-company copies** (scanIdx 28 → 873), and the cross-company 2-hop (5) crosses shards
+   (**RemoteNode = 4** vs 0 on the baseline). Global concept roll-ups must aggregate
+   `BY name` and pay cross-shard hops (multi-distribution-plan §5.7).
 
 ## Caveats
 
-- **Single shard.** All numbers reflect one DBServer; they do **not** measure
-  cluster scale-out. See [sharding-analysis.md](sharding-analysis.md) for the
-  deferred Disjoint-SmartGraph path if scale benchmarking is wanted.
-- Result-row counts are first-batch (1000) for unbounded queries; `scannedIndex`
-  reflects the true match count for the index-backed cases.
+- **Shared cluster, noisy latency.** Use `scannedIndex` and `RemoteNode` as the portable
+  metrics; reserve wall-clock for a quiescent window before quoting absolute numbers.
+- **† Smart temporal (query 6):** the discovered `ticker` (`aa`) had no edges in 2022–2024,
+  so that cell scans 0 — not a fair latency comparison. Pin a fixed high-volume ticker for
+  a publishable temporal number.
+- **Smart Class 8 grouping:** groups by `ticker`-prefixed `_from`/`_to` keys (per-company
+  concept copies); since edges aren't duplicated the edge slice — and thus `scannedIndex`
+  and latency — matches the baseline.
+- **`RemoteNode = 1 / GatherNode = 1`** on most direct edge queries even on OneShard is
+  just the coordinator shipping the final result from the single DBServer, *not* per-shard
+  scatter/gather. The meaningful locality signals are the SmartGraph's per-company scan
+  reduction (2, 3, 4a) and the `RemoteNode = 4` on the cross-company smart 2-hop (5).
 
 ---
 
-# Cross-distribution results (G7) — v2.0 · 2026-07-05
+## History
 
-Same suite run against all three distributions of the identical dataset:
-`FinReflectKG` (flexible 1-shard), `FinReflectKgOneShard` (OneShard), and
-`FinReflectKgSmart` (Disjoint SmartGraph by `ticker`, Design 2). Entities are
-**discovered per database** because the SmartGraph rewrites keys with a `ticker`
-prefix and duplicates shared concepts per company — so `net income` on the smart
-db is a *specific company's copy*, not the single global supernode.
-
-Deterministic metrics: **`scannedIndex`** (edges the index actually touched) and
-**explain locality** (`RemoteNode` count `r`, i.e. cross-DBServer hops). Latency is
-median of 7 iters after warmup — indicative only on the shared cluster.
-
-| # | Query | Baseline med / scanIdx | OneShard med / scanIdx | SmartGraph med / scanIdx |
-|---|-------|----------------------:|-----------------------:|-------------------------:|
-| 1 | point lookup by `name` | 0.9 ms / 28 | 0.5 ms / 28 | 2.3 ms / **873** |
-| 2 | 1-hop typed OUT (`operates_in`→GPE) | 16.4 ms / 6,290 | 18.9 ms / 6,290 | 15.3 ms / 6,290 |
-| 3 | reverse typed IN (`has_stake_in`) | 17.1 ms / 2,882 | 14.6 ms / 2,882 | **0.9 ms / 7** |
-| 4a | supernode **pruned** (`net income`, VCI) | 228.6 ms / 59,315 | 202.5 ms / 59,315 | **0.9 ms / 35** |
-| 4b | supernode **unpruned** (traversal) | 451.1 ms / 99,295 | 364.0 ms / 99,295 | **1.6 ms / 55** |
-| 5 | 2-hop (company→metric→peers) | 27.0 ms / 2,747 (r0) | 6.8 ms / 2,026 (r1) | 7.5 ms / 1,099 (**r4**) |
-| 6 | temporal slice (`ticker`+year) | 24.7 ms / 10,385 | 21.9 ms / 10,385 | 0.9 ms / 0 †|
-| 7 | NL-grounding (edge→`chunks`) | 6.2 ms / 20 | 0.9 ms / 20 | 5.3 ms / 20 |
-
-† The smart run's discovered `ticker` (`aa`) had no edges in 2022–2024, so that
-cell scans 0 — not a fair latency comparison. Pin a fixed high-volume ticker for a
-publishable temporal number.
-
-## Cross-distribution findings
-
-1. **Supernode decomposition is the SmartGraph headline.** Design 2 duplicates each
-   shared concept per company, so the global `net income` supernode (in-degree ~99 K)
-   becomes ~743 small per-company nodes. A per-company query against it scans **35–55
-   edges instead of 59 K–99 K** — 4a drops **228.6 ms → 0.9 ms (~250×)** and 4b
-   **451.1 ms → 1.6 ms (~280×)**. This is the payoff the disjoint-by-`ticker` model was
-   chosen for: company-scoped analytics never touch other companies' data.
-
-2. **The documented trade-off shows up exactly where predicted.** *Global* concept
-   access costs more on the smart db: a `name` lookup for `net income` now returns
-   **873 per-company copies** (scanIdx 28 → 873), and the cross-company 2-hop (query 5)
-   crosses shards — **`RemoteNode` = 4** vs 0 on the baseline. This matches the Design 2
-   caveat (multi-distribution-plan §5.7): global concept roll-ups must aggregate
-   `BY name` and pay cross-shard hops. Fall back to Design B only if such global
-   roll-ups dominate the workload.
-
-3. **Company-local access paths are identical across all three.** The 1-hop typed
-   OUT query (2) scans exactly 6,290 edges everywhere — it was already company-scoped,
-   so placement doesn't change it.
-
-4. **OneShard modestly beats the baseline on multi-hop** by co-locating execution on
-   one DBServer: 2-hop **27.0 ms → 6.8 ms** and the unpruned supernode traversal
-   **451.1 ms → 364.0 ms**, with identical scan counts (same global 1-shard graph).
-
-5. **The VCIs narrow perfectly under every placement** — `scannedFull = 0` and
-   `filtered = 0` on all index-backed queries across all three databases.
-
-**Locality caveat:** most direct edge queries show `RemoteNode = 1 / GatherNode = 1`
-even on OneShard — that is just the coordinator shipping the final result from the
-single DBServer, *not* per-shard scatter/gather. The meaningful locality signals here
-are (a) the SmartGraph's per-company scan reduction and (b) the `RemoteNode = 4` on the
-cross-company smart 2-hop, which flags genuine cross-shard traversal.
+- **v2.0 (2026-07-05):** first cross-distribution run (Classes 1–7), pre-type-index.
+  Established the ~250× SmartGraph supernode decomposition and the OneShard multi-hop win.
+- **v1.0 (2026-07-05):** single-shard baseline (Classes 1–7) on `FinReflectKG` — confirmed
+  the VCIs narrow perfectly (`scannedFull = 0` throughout) and the supernode pruned-vs-
+  unpruned gap (4a vs 4b). Superseded by the cross-distribution runs above.

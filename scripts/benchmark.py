@@ -131,6 +131,30 @@ def build_suite(ent):
          "query": """FOR e IN relations FILTER e._from==@c AND e.type=='operates_in' LIMIT 20
              LET ch = DOCUMENT('chunks', e.chunkKey)
            RETURN {rel:e.type, to:e._to, text: ch.text ? SUBSTRING(ch.text,0,80) : null}"""},
+        # --- Class 8: label-rooted aggregations (no bound start node) --------- #
+        # "all :ORG that ..." — the access pattern the node-anchored VCIs cannot
+        # serve (no bound _from/_to). Engaged by the type-leading indexes
+        # vci_type_{fromtype_totype,totype_fromtype} added 2026-07-22; without them
+        # the label-wide filter has no selective index and scans the full edge
+        # collection (times out). Not entity-bound — fixed type filters.
+        {"name": "8a. label agg: orgs by #GPE (operates_in)", "bind": {},
+         "note": "vci_type_fromtype_totype (from-anchored)",
+         "query": """FOR e IN relations
+            FILTER e.type=='operates_in' AND e._fromType=='ORG' AND e._toType=='GPE'
+            COLLECT org=e._from WITH COUNT INTO c FILTER c>3
+            SORT c DESC LIMIT 25 RETURN {org, c}"""},
+        {"name": "8b. label agg: GPEs by #ORG (operates_in rev)", "bind": {},
+         "note": "vci_type_totype_fromtype (to-anchored)",
+         "query": """FOR e IN relations
+            FILTER e.type=='operates_in' AND e._toType=='GPE' AND e._fromType=='ORG'
+            COLLECT gpe=e._to WITH COUNT INTO c
+            SORT c DESC LIMIT 25 RETURN {gpe, c}"""},
+        {"name": "8c. label agg: orgs in litigation (involved_in)", "bind": {},
+         "note": "vci_type_fromtype_totype (small slice)",
+         "query": """FOR e IN relations
+            FILTER e.type=='involved_in' AND e._fromType=='ORG' AND e._toType=='LITIGATION'
+            COLLECT org=e._from WITH COUNT INTO c
+            SORT c DESC LIMIT 25 RETURN {org, c}"""},
     ]
 
 

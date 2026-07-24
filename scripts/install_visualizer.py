@@ -37,8 +37,32 @@ from datetime import datetime, timezone
 from arango import ENV, req
 
 DB = ENV.get("ARANGO_DB", "FinReflectKG")
-GRAPH = "FinReflectKG"
 THEME_NAME = "FinReflectKG"
+
+
+def _detect_graph():
+    """The user graph in this DB (excludes the Visualizer's own `_viewpointGraph`).
+
+    Graph names differ per distribution: the baseline and OneShard DBs both name
+    their graph `FinReflectKG`, while the SmartGraph DB names it `FinReflectKgSmart`.
+    Detecting it (rather than hard-coding) lets one installer serve all three.
+    """
+    from arango import req as _req  # local import: module-level req already available
+    status, body = _req("POST", "/_api/cursor", {
+        "query": "FOR g IN _graphs FILTER g._key != '_viewpointGraph' "
+                 "AND NOT STARTS_WITH(g._key, '_') LIMIT 1 RETURN g._key"}, db=DB)
+    names = body.get("result", []) if status in (200, 201) else []
+    return names[0] if names else "FinReflectKG"
+
+
+# Explicit override wins (build scripts can export ARANGO_GRAPH); else auto-detect.
+GRAPH = ENV.get("ARANGO_GRAPH") or _detect_graph()
+
+# Whether the type-based theme auto-applies (is the graph's default). Default ON so the
+# LPG per-`type` styling shows without a Legend click. Trade-off: a theme that IS the
+# UI default cannot be edited/saved in the Visualizer UI — edit it here and re-run.
+# Set ARANGO_THEME_DEFAULT=0 to keep it opt-in (plain "Default" auto-applies instead).
+THEME_AS_DEFAULT = ENV.get("ARANGO_THEME_DEFAULT", "1").lower() in ("1", "true", "yes")
 
 # Stable namespace for deriving deterministic rule UUIDs (so re-runs produce
 # identical theme documents — the Visualizer keys rules by `id`).
@@ -53,91 +77,95 @@ EDGE_BASE_COLOR = "#cbd5e0"   # light gray
 # family; the icon distinguishes types within it. Covers ~98.6% of nodes; the
 # long tail (9,605 distinct types total) falls back to the base style.
 # --------------------------------------------------------------------------- #
+# Icons are Material Design Icons (`mdi:`) — the set this ArangoDB Graph Visualizer
+# resolves (its built-in Default theme uses `mdi:table`). `fa6-solid:` names do NOT
+# resolve here: the whole rule config is rejected and nodes fall back to the generic
+# glyph (uniform, no per-type colour/icon).
 NODE_FAMILIES = {
     "financial_metric": ("#2b6cb0", {
-        "FIN_METRIC": "fa6-solid:chart-line",
-        "OPERATIONAL_METRIC": "fa6-solid:gauge-high",
-        "ECON_IND": "fa6-solid:chart-column",
-        "FIN_MARKET": "fa6-solid:arrow-trend-up",
-        "MARKET": "fa6-solid:store",
+        "FIN_METRIC": "mdi:chart-line",
+        "OPERATIONAL_METRIC": "mdi:speedometer",
+        "ECON_IND": "mdi:chart-bar",
+        "FIN_MARKET": "mdi:trending-up",
+        "MARKET": "mdi:store",
     }),
     "financial_instrument": ("#2c7a7b", {
-        "FIN_INST": "fa6-solid:building-columns",
-        "FIN_ASSET": "fa6-solid:money-bill-trend-up",
-        "ASSET": "fa6-solid:sack-dollar",
-        "PROPERTY": "fa6-solid:building",
-        "INFRASTRUCTURE": "fa6-solid:tower-broadcast",
-        "FACILITY": "fa6-solid:industry",
+        "FIN_INST": "mdi:bank",
+        "FIN_ASSET": "mdi:cash-multiple",
+        "ASSET": "mdi:currency-usd",
+        "PROPERTY": "mdi:office-building",
+        "INFRASTRUCTURE": "mdi:radio-tower",
+        "FACILITY": "mdi:factory",
     }),
     "organization": ("#4c51bf", {
-        "ORG": "fa6-solid:building",
-        "COMP": "fa6-solid:building-user",
-        "ORG_REG": "fa6-solid:building-shield",
-        "ORG_GOV": "fa6-solid:landmark",
-        "SECTOR": "fa6-solid:layer-group",
+        "ORG": "mdi:domain",
+        "COMP": "mdi:office-building",
+        "ORG_REG": "mdi:shield-account",
+        "ORG_GOV": "mdi:bank",
+        "SECTOR": "mdi:layers",
     }),
     "person_role": ("#6b46c1", {
-        "PERSON": "fa6-solid:user",
-        "ROLE": "fa6-solid:user-tag",
-        "POSITION": "fa6-solid:user-tie",
+        "PERSON": "mdi:account",
+        "ROLE": "mdi:account-tag",
+        "POSITION": "mdi:account-tie",
     }),
     "product_service": ("#c05621", {
-        "PRODUCT": "fa6-solid:box",
-        "SERVICE": "fa6-solid:concierge-bell",
-        "BRAND": "fa6-solid:tag",
-        "RAW_MATERIAL": "fa6-solid:cubes",
-        "TECHNOLOGY": "fa6-solid:microchip",
+        "PRODUCT": "mdi:package-variant",
+        "SERVICE": "mdi:room-service",
+        "BRAND": "mdi:tag",
+        "RAW_MATERIAL": "mdi:cube-outline",
+        "TECHNOLOGY": "mdi:chip",
     }),
     "risk_legal": ("#c53030", {
-        "RISK_FACTOR": "fa6-solid:triangle-exclamation",
-        "LITIGATION": "fa6-solid:gavel",
-        "LEGAL_DOCUMENT": "fa6-solid:file-contract",
-        "LEGAL_DOC": "fa6-solid:file-contract",
-        "LEGAL_ACTION": "fa6-solid:scale-balanced",
-        "CONTRACT": "fa6-solid:file-signature",
+        "RISK_FACTOR": "mdi:alert",
+        "LITIGATION": "mdi:gavel",
+        "LEGAL_DOCUMENT": "mdi:file-document",
+        "LEGAL_DOC": "mdi:file-document",
+        "LEGAL_ACTION": "mdi:scale-balance",
+        "CONTRACT": "mdi:file-document-edit",
     }),
     "regulatory_policy": ("#b7791f", {
-        "REGULATORY_REQUIREMENT": "fa6-solid:clipboard-check",
-        "REGULATIVE_REQUIREMENT": "fa6-solid:clipboard-check",
-        "ACCOUNTING_POLICY": "fa6-solid:book",
-        "POLICY": "fa6-solid:file-shield",
-        "FIN_POLICY": "fa6-solid:file-invoice-dollar",
+        "REGULATORY_REQUIREMENT": "mdi:clipboard-check",
+        "REGULATIVE_REQUIREMENT": "mdi:clipboard-check",
+        "ACCOUNTING_POLICY": "mdi:book-open-variant",
+        "POLICY": "mdi:file-lock",
+        "FIN_POLICY": "mdi:file-document-outline",
     }),
     "macro_concept": ("#0987a0", {
-        "MACRO_CONDITION": "fa6-solid:earth-americas",
-        "CONCEPT": "fa6-solid:lightbulb",
-        "COMMENTARY": "fa6-solid:comment-dots",
+        "MACRO_CONDITION": "mdi:earth",
+        "CONCEPT": "mdi:lightbulb",
+        "COMMENTARY": "mdi:comment-text",
     }),
     "geography": ("#2f855a", {
-        "GPE": "fa6-solid:location-dot",
-        "LOCATION": "fa6-solid:map-location-dot",
+        "GPE": "mdi:map-marker",
+        "LOCATION": "mdi:map-marker-radius",
     }),
     "event_action": ("#b83280", {
-        "EVENT": "fa6-solid:calendar-day",
-        "ACTION": "fa6-solid:bolt",
-        "ACTIVITY": "fa6-solid:person-running",
-        "OPERATION": "fa6-solid:gears",
-        "STRATEGIC_ACTION": "fa6-solid:chess-knight",
-        "BUSINESS_ACTIVITY": "fa6-solid:briefcase",
+        "EVENT": "mdi:calendar",
+        "ACTION": "mdi:lightning-bolt",
+        "ACTIVITY": "mdi:run",
+        "OPERATION": "mdi:cog",
+        "STRATEGIC_ACTION": "mdi:flag",
+        "BUSINESS_ACTIVITY": "mdi:briefcase",
     }),
     "segment_strategy": ("#4a5568", {
-        "SEGMENT": "fa6-solid:chart-pie",
-        "PROJECT": "fa6-solid:diagram-project",
-        "PROGRAM": "fa6-solid:list-check",
-        "STRATEGY": "fa6-solid:chess",
-        "GOAL": "fa6-solid:bullseye",
+        "SEGMENT": "mdi:chart-pie",
+        "PROJECT": "mdi:sitemap",
+        "PROGRAM": "mdi:format-list-checks",
+        "STRATEGY": "mdi:flag-variant",
+        "GOAL": "mdi:target",
     }),
     "esg": ("#38a169", {
-        "ESG_TOPIC": "fa6-solid:leaf",
+        "ESG_TOPIC": "mdi:leaf",
     }),
     "document_data": ("#718096", {
-        "DOCUMENT": "fa6-solid:file-lines",
-        "DATA": "fa6-solid:database",
-        "PROCESS": "fa6-solid:diagram-next",
-        "LOGISTICS": "fa6-solid:truck",
-        "BENEFIT": "fa6-solid:hand-holding-dollar",
-        "TIMESTAMP": "fa6-solid:clock",
-        "TIME_PERIOD": "fa6-solid:calendar-days",
+        "DOCUMENT": "mdi:text-box",
+        "DATA": "mdi:database",
+        "PROCESS": "mdi:cog-outline",
+        "LOGISTICS": "mdi:truck",
+        "BENEFIT": "mdi:hand-coin",
+        "TIMESTAMP": "mdi:clock",
+        "TIME_PERIOD": "mdi:calendar-month",
     }),
 }
 
@@ -321,7 +349,7 @@ def build_theme():
     node_config_map = {
         # Base style for any Node whose type matches no rule.
         "Node": {
-            "background": {"color": NODE_BASE_COLOR, "iconName": "fa6-solid:circle-nodes"},
+            "background": {"color": NODE_BASE_COLOR, "iconName": "mdi:circle-outline"},
             "labelAttribute": "name",
             "hoverInfoAttributes": ["name", "type"],
             "rules": node_rules,
@@ -329,7 +357,7 @@ def build_theme():
         # chunks is not in the named graph, but style it so source-text docs are
         # visually distinct (a book page) if pulled onto the canvas via a query.
         "chunks": {
-            "background": {"color": "#8b6f47", "iconName": "fa6-solid:book-open"},
+            "background": {"color": "#8b6f47", "iconName": "mdi:book-open-page-variant"},
             "labelAttribute": "pageId",
             "hoverInfoAttributes": ["sourceFile", "pageId", "year", "ticker"],
             "rules": [],
@@ -348,7 +376,7 @@ def build_theme():
     return {
         "name": THEME_NAME,
         "graphId": GRAPH,
-        "isDefault": False,   # opt-in via Legend; custom defaults can't be edited in the UI
+        "isDefault": THEME_AS_DEFAULT,   # auto-apply the type styling (see THEME_AS_DEFAULT)
         "nodeConfigMap": node_config_map,
         "edgeConfigMap": edge_config_map,
     }, len(node_rules), len(edge_rules)
@@ -357,27 +385,38 @@ def build_theme():
 def install_theme():
     ensure_collection("_graphThemeStore")
     theme, n_node, n_edge = build_theme()
-    key = slug(f"{GRAPH}_{THEME_NAME}")
-    upsert_doc("_graphThemeStore", key, theme)
-    print(f"theme '{THEME_NAME}': {n_node} node rules, {n_edge} edge rules")
+    type_key = slug(f"{GRAPH}_{THEME_NAME}")
+    upsert_doc("_graphThemeStore", type_key, theme)
+    print(f"theme '{THEME_NAME}': {n_node} node rules, {n_edge} edge rules "
+          f"(isDefault={THEME_AS_DEFAULT})")
 
-    # Ensure *some* theme is the auto-applied default so the graph never opens
-    # unstyled, without making our (editable) custom theme the default.
-    q = "FOR t IN _graphThemeStore FILTER t.graphId == @g AND t.isDefault == true RETURN 1"
+    # Plain fallback theme (no rules). Kept editable in the UI: it is the graph's
+    # default ONLY when the type theme is not (THEME_AS_DEFAULT off).
+    default_key = slug(f"{GRAPH}_Default")
+    upsert_doc("_graphThemeStore", default_key, {
+        "name": "Default", "graphId": GRAPH, "isDefault": not THEME_AS_DEFAULT,
+        "nodeConfigMap": {"Node": {"background": {"color": NODE_BASE_COLOR,
+                          "iconName": "mdi:circle-outline"},
+                          "labelAttribute": "name", "hoverInfoAttributes": ["name", "type"],
+                          "rules": []}},
+        "edgeConfigMap": {"relations": {"lineStyle": {"color": EDGE_BASE_COLOR, "thickness": 1.0},
+                          "labelAttribute": "type",
+                          "arrowStyle": {"sourceArrowShape": "none", "targetArrowShape": "triangle"},
+                          "labelStyle": {"color": "#1d2531"}, "hoverInfoAttributes": [], "rules": []}},
+    })
+
+    # Enforce exactly one isDefault:true for this graph (Visualizer corrupts with
+    # zero or multiple). The intended default is the type theme, or the plain
+    # fallback when THEME_AS_DEFAULT is off.
+    want = type_key if THEME_AS_DEFAULT else default_key
+    q = "FOR t IN _graphThemeStore FILTER t.graphId == @g RETURN t._key"
     status, body = req("POST", "/_api/cursor", {"query": q, "bindVars": {"g": GRAPH}}, db=DB)
-    if status in (200, 201) and not body.get("result"):
-        upsert_doc("_graphThemeStore", slug(f"{GRAPH}_Default"), {
-            "name": "Default", "graphId": GRAPH, "isDefault": True,
-            "nodeConfigMap": {"Node": {"background": {"color": NODE_BASE_COLOR,
-                              "iconName": "fa6-solid:circle-nodes"},
-                              "labelAttribute": "name", "hoverInfoAttributes": ["name", "type"],
-                              "rules": []}},
-            "edgeConfigMap": {"relations": {"lineStyle": {"color": EDGE_BASE_COLOR, "thickness": 1.0},
-                              "labelAttribute": "type",
-                              "arrowStyle": {"sourceArrowShape": "none", "targetArrowShape": "triangle"},
-                              "labelStyle": {"color": "#1d2531"}, "hoverInfoAttributes": [], "rules": []}},
-        })
-        print("theme 'Default': created (isDefault=true baseline)")
+    for k in (body.get("result", []) if status in (200, 201) else []):
+        doc = doc_get("_graphThemeStore", k)
+        if doc and bool(doc.get("isDefault")) != (k == want):
+            doc["isDefault"] = (k == want)
+            req("PUT", f"/_api/document/_graphThemeStore/{k}", doc, db=DB)
+    print(f"default theme for '{GRAPH}': {want}")
 
 
 # --------------------------------------------------------------------------- #
