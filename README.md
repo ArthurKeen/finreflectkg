@@ -22,7 +22,8 @@ over **743 companies** (paper: [arXiv:2508.17906](https://arxiv.org/abs/2508.179
 | **ETL** | DuckDB-based parquet → JSONL transform + `arangoimport` bulk load. Idempotent and resumable end-to-end. |
 | **Indexing** | Vertex-centric (persistent) indexes on `relations` to prune typed 1-hop queries by edge type and far-end node type. |
 | **Multi-distribution** | The same dataset built under three placements — a baseline single-shard db, a **OneShard** db, and a **Disjoint SmartGraph** db — for comparative scale benchmarking. |
-| **Benchmarks** | Representative query classes (point lookup, typed 1-hop, supernode handling, k-hop paths, temporal slices, NL-grounding joins). |
+| **Benchmarks** | Representative query classes (point lookup, typed 1-hop, supernode handling, k-hop paths, temporal slices, NL-grounding joins, label-rooted aggregations). |
+| **Graph analytics** *(planned, phase 2)* | PageRank/centrality, connected components, and community detection via the ArangoDB **Graph Analytics Engine (GAE)**, plus an agentic NL→insights layer. GAE availability on the ACP cluster is confirmed and the integration approach (`agentic-graph-analytics`) is chosen; implementation is deferred. See [`docs/PRD.md`](docs/PRD.md) §4.7. |
 | **Docs** | A full PRD and supporting design/analysis docs under [`docs/`](docs/). |
 
 See **[`docs/PRD.md`](docs/PRD.md)** for the authoritative design, goals, and current status.
