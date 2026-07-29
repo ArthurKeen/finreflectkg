@@ -21,7 +21,8 @@
   re-deploying) and 404s, whereas **`agentic-graph-analytics`** (`graph_analytics_ai`) is
   ACP-ready (readiness polling + retry on the transient `unknown path '/gral/..'`) and
   ships **both** a deterministic orchestrator mode and an agentic NL→insights mode.
-  **Decision:** integrate via `graph_analytics_ai` (both layers), not the standalone
+  **Decision:** integrate via **`agentic-graph-analytics`** (both layers — it contains
+  the deterministic orchestrator *and* the agentic layer), not the standalone
   orchestrator. A draft scaffold ([scripts/analytics.py](../scripts/analytics.py)) exists,
   to be re-pointed. No further cluster work this pass.
 - **v0.9 (2026-07-22):** **M5 complete — NL→Cypher front-end + GraphRAG synthesis.**
@@ -126,7 +127,7 @@ This is a POC to load that dataset into a managed ArangoDB deployment and evalua
 | G5 | Query-performance baseline | A benchmark suite of representative graph queries with recorded latencies (see §6) | **Done** — suite ([scripts/benchmark.py](../scripts/benchmark.py)) run across all three distributions; deterministic scanned-edge + explain-locality metrics recorded ([benchmark-report.md](benchmark-report.md)) |
 | G6 | NL-query readiness | Source-text chunks joinable from every edge; **Cypher→AQL / NL→Cypher via `arango-cypher-py`** (§4.6) + GraphRAG grounding | **Done (FinReflectKG-side)** — NL→Cypher **front-end** run ([scripts/nl2cypher_eval.py](../scripts/nl2cypher_eval.py)): **19/22 transpile, 9/22 execute, 0 `MAPPING_NOT_FOUND`** (vocabulary gap closed); hand-written Cypher path 14/22 · 7/22 ([scripts/cypher_eval.py](../scripts/cypher_eval.py)); GraphRAG grounding 24/24 + **answer synthesis 5/5** ([scripts/graphrag.py](../scripts/graphrag.py), [scripts/graphrag_rubric.py](../scripts/graphrag_rubric.py)); gold-set AQL runner 21/22. Remaining ceiling is upstream (transpiler bugs, non-VCI AQL efficiency, analyzer cap) — see [nl-graphrag.md](nl-graphrag.md) |
 | G7 | Multiple distributions for comparative scale benchmarking | Same dataset built as a **OneShard** db (`FinReflectKgOneShard`) and a **sharded SmartGraph** db (`FinReflectKgSmart`) alongside the baseline `FinReflectKG`; sharding verified (see §4.5) | **Done** — OneShard and SmartGraph both built & verified ([multi-distribution-plan.md](multi-distribution-plan.md)) |
-| G8 | Graph analytics over the graph (GAE): centrality/PageRank, connected components (WCC/SCC), community detection — deterministic jobs + an agentic NL→insights layer | Reproducible GAE jobs on `Node`/`relations` with recorded results (non-mutating result collections), plus an NL/requirements→insights flow (see §4.7) | **Deferred (phase 2)** — GAE availability on ACP confirmed and integration approach chosen (`graph_analytics_ai`); implementation deferred (§4.7) |
+| G8 | Graph analytics over the graph (GAE): centrality/PageRank, connected components (WCC/SCC), community detection — deterministic jobs + an agentic NL→insights layer | Reproducible GAE jobs on `Node`/`relations` with recorded results (non-mutating result collections), plus an NL/requirements→insights flow (see §4.7) | **Deferred (phase 2)** — GAE availability on ACP confirmed and integration approach chosen (`agentic-graph-analytics`); implementation deferred (§4.7) |
 
 ### Non-goals (this phase)
 
@@ -341,10 +342,12 @@ deployment. A **self-managed** GAE engine deploys and deletes cleanly
 (`/gral/<id>/v1/loaddata`) becomes live only ~30–60 s after deploy while the GRAL
 ingress rolls out.
 
-**Tooling decision:** integrate via **`agentic-graph-analytics`** (`graph_analytics_ai`),
-whose GAE client is ACP-ready (readiness polling + retry on the transient
-`unknown path '/gral/..'` signature) and which provides **both** the deterministic
-orchestrator mode and the agentic mode. The standalone **`graph-analytics-orchestrator`**
+**Tooling decision:** integrate via **`agentic-graph-analytics`** — the repo/tool
+(pip distribution `graph-analytics-ai`; import package `graph_analytics_ai`) — whose GAE
+client is ACP-ready (readiness polling + retry on the transient `unknown path '/gral/..'`
+signature) and which provides **both** the deterministic orchestrator
+(`graph_analytics_ai/ai/workflow/orchestrator.py`) and the agentic layer
+(`graph_analytics_ai/ai/agents/`), so the one tool covers both layers. The standalone **`graph-analytics-orchestrator`**
 was evaluated and rejected for this cluster: it retries a failed load only ~3×/~12 s by
 re-deploying (never waiting for ingress), so it 404s on ACP. Connection is self-managed
 (reuses the `.env` ArangoDB endpoint + JWT; `GAE_DEPLOYMENT_MODE=self_managed`,
@@ -352,8 +355,9 @@ re-deploying (never waiting for ingress), so it 404s on ACP. Connection is self-
 
 **Status:** availability + approach established; implementation **deferred**. A draft
 scaffold exists at [scripts/analytics.py](../scripts/analytics.py) (currently written
-against the rejected orchestrator; re-point at `graph_analytics_ai` when implementing —
-its `AnalysisConfig` for the LPG and result-summary logic carry over).
+against the rejected orchestrator; re-point at `agentic-graph-analytics`'s orchestrator
+mode — `import graph_analytics_ai` — when implementing; its `AnalysisConfig` for the LPG
+and result-summary logic carry over).
 
 ## 5. Sizing (from data analysis)
 
@@ -404,7 +408,7 @@ Note: latency on the shared remote cluster is noisy (a single query has ranged
 | M4 | Benchmark suite + results | G5 (+ G7 cross-distribution) | **Done** — cross-distribution suite + results ([benchmark-report.md](benchmark-report.md)); SmartGraph decomposes the `net income` supernode ~250× on per-company queries; latency indicative on the shared cluster |
 | M5 | NL-query evaluation (Cypher→AQL / NL→Cypher via `arango-cypher-py` + GraphRAG) | G6, §4.6 | **Done (FinReflectKG-side)** — schema-aware **NL→Cypher front-end** run ([scripts/nl2cypher_eval.py](../scripts/nl2cypher_eval.py)): **19/22 transpile · 9/22 execute · 0 `MAPPING_NOT_FOUND`** (vs 14/22 · 7/22 for hand-written Cypher, [scripts/cypher_eval.py](../scripts/cypher_eval.py)). **GraphRAG answer synthesis 5/5** ([scripts/graphrag_rubric.py](../scripts/graphrag_rubric.py)). Root-caused the gold-set vocabulary mismatch against live data (sibling-schema rename `:RISK`→`RISK_FACTOR`; `ORG_REG` real but capped out of the top-20 ontology; `:METADATA` absent). Remaining upstream: transpiler ERR 1511 (multi-`WITH`), non-VCI AQL efficiency, analyzer entity cap, `reduce()` ([nl-graphrag.md](nl-graphrag.md)) |
 | M6 | Multi-distribution builds (OneShard + SmartGraph) | G7 | **Done** — OneShard and SmartGraph both built & verified ([multi-distribution-plan.md](multi-distribution-plan.md)) |
-| M7 | Graph analytics via GAE (deterministic jobs + agentic NL→insights) | G8, §4.7 | **Deferred (phase 2)** — GAE availability on ACP confirmed, `graph_analytics_ai` chosen as the ACP-ready integration; implementation deferred |
+| M7 | Graph analytics via GAE (deterministic jobs + agentic NL→insights) | G8, §4.7 | **Deferred (phase 2)** — GAE availability on ACP confirmed, `agentic-graph-analytics` chosen as the ACP-ready integration (both layers); implementation deferred |
 
 ## 8. Risks & open questions
 
