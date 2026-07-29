@@ -1,6 +1,6 @@
 # PRD — FinReflectKG on ArangoDB (Proof of Concept)
 
-**Status:** Draft v0.10 · 2026-07-29 (added graph-analytics goal G8/§4.7 — GAE availability on ACP confirmed, approach chosen, implementation deferred; M5 complete — §4.6)
+**Status:** Draft v0.11 · 2026-07-29 (graph-analytics base implemented & verified — GAE PageRank + WCC end-to-end on all 3.1 M nodes via `agentic-graph-analytics`; agentic NL→insights layer pending — G8/§4.7)
 **Authors:** Arthur Keen (ArangoDB)
 **Related docs:** [data-analysis.md](data-analysis.md) · [etl-plan.md](etl-plan.md) ·
 [load-report.md](load-report.md) · [sharding-analysis.md](sharding-analysis.md) ·
@@ -11,6 +11,17 @@
 
 ## 0. Changelog
 
+- **v0.11 (2026-07-29):** **Graph-analytics base layer implemented & verified (G8).**
+  Resumed via **`agentic-graph-analytics`** (`import graph_analytics_ai`, ACP-ready)
+  installed into `.venv311`; re-pointed [scripts/analytics.py](../scripts/analytics.py)
+  and ran GAE jobs **end-to-end** on the self-managed ACP engine (deploy → readiness →
+  load → analyze → store → cleanup): **PageRank** — top nodes `net income`, `revenue`,
+  `net sale`, `operate income`, … (the central `FIN_METRIC` supernodes), ~1.9 min,
+  3,099,773 result docs, ≈$0.013 — and **WCC** — 3,322 components, one giant component of
+  3,091,396 nodes (99.7%), ~1.5 min. Results land in non-mutating `gae_<algorithm>`
+  collections. The GRAL ingress-readiness issue that blocked the standalone orchestrator
+  is handled by this client (readiness poll + transient-404 retry). Agentic NL→insights
+  layer still pending. G8/M7 → Partial.
 - **v0.10 (2026-07-29):** **Graph analytics (GAE) — goal added, availability + approach
   established, implementation deferred (new G8 / §4.7).** Confirmed the ArangoDB Graph
   Analytics Engine is available on this deployment: it's an **ArangoDB Platform (ACP)**
@@ -127,7 +138,7 @@ This is a POC to load that dataset into a managed ArangoDB deployment and evalua
 | G5 | Query-performance baseline | A benchmark suite of representative graph queries with recorded latencies (see §6) | **Done** — suite ([scripts/benchmark.py](../scripts/benchmark.py)) run across all three distributions; deterministic scanned-edge + explain-locality metrics recorded ([benchmark-report.md](benchmark-report.md)) |
 | G6 | NL-query readiness | Source-text chunks joinable from every edge; **Cypher→AQL / NL→Cypher via `arango-cypher-py`** (§4.6) + GraphRAG grounding | **Done (FinReflectKG-side)** — NL→Cypher **front-end** run ([scripts/nl2cypher_eval.py](../scripts/nl2cypher_eval.py)): **19/22 transpile, 9/22 execute, 0 `MAPPING_NOT_FOUND`** (vocabulary gap closed); hand-written Cypher path 14/22 · 7/22 ([scripts/cypher_eval.py](../scripts/cypher_eval.py)); GraphRAG grounding 24/24 + **answer synthesis 5/5** ([scripts/graphrag.py](../scripts/graphrag.py), [scripts/graphrag_rubric.py](../scripts/graphrag_rubric.py)); gold-set AQL runner 21/22. Remaining ceiling is upstream (transpiler bugs, non-VCI AQL efficiency, analyzer cap) — see [nl-graphrag.md](nl-graphrag.md) |
 | G7 | Multiple distributions for comparative scale benchmarking | Same dataset built as a **OneShard** db (`FinReflectKgOneShard`) and a **sharded SmartGraph** db (`FinReflectKgSmart`) alongside the baseline `FinReflectKG`; sharding verified (see §4.5) | **Done** — OneShard and SmartGraph both built & verified ([multi-distribution-plan.md](multi-distribution-plan.md)) |
-| G8 | Graph analytics over the graph (GAE): centrality/PageRank, connected components (WCC/SCC), community detection — deterministic jobs + an agentic NL→insights layer | Reproducible GAE jobs on `Node`/`relations` with recorded results (non-mutating result collections), plus an NL/requirements→insights flow (see §4.7) | **Deferred (phase 2)** — GAE availability on ACP confirmed and integration approach chosen (`agentic-graph-analytics`); implementation deferred (§4.7) |
+| G8 | Graph analytics over the graph (GAE): centrality/PageRank, connected components (WCC/SCC), community detection — deterministic jobs + an agentic NL→insights layer | Reproducible GAE jobs on `Node`/`relations` with recorded results (non-mutating result collections), plus an NL/requirements→insights flow (see §4.7) | **Partial** — deterministic base **implemented & verified** ([scripts/analytics.py](../scripts/analytics.py)): PageRank + WCC run end-to-end on all 3.1 M nodes via `agentic-graph-analytics` (self-managed ACP GAE); agentic NL→insights layer pending |
 
 ### Non-goals (this phase)
 
@@ -353,11 +364,27 @@ re-deploying (never waiting for ingress), so it 404s on ACP. Connection is self-
 (reuses the `.env` ArangoDB endpoint + JWT; `GAE_DEPLOYMENT_MODE=self_managed`,
 `ARANGO_DATABASE`), no extra credentials.
 
-**Status:** availability + approach established; implementation **deferred**. A draft
-scaffold exists at [scripts/analytics.py](../scripts/analytics.py) (currently written
-against the rejected orchestrator; re-point at `agentic-graph-analytics`'s orchestrator
-mode — `import graph_analytics_ai` — when implementing; its `AnalysisConfig` for the LPG
-and result-summary logic carry over).
+**Status (base — verified 2026-07-29):** the deterministic base is **implemented** in
+[scripts/analytics.py](../scripts/analytics.py) (`import graph_analytics_ai`, runs under
+`.venv311`) and **verified end-to-end** on the self-managed ACP GAE:
+
+- **PageRank** — 114.8 s (deploy 69.8 s + load 14 s + compute 3.3 s + store/verify),
+  3,099,773 result docs in `gae_pagerank` (field `rank`), ≈$0.013. Top-ranked nodes are
+  the central financial concepts: `net income`, `revenue`, `net sale`, `operate income`,
+  `fair value`, `gross margin`, … plus `new york stock exchange` (FIN_MARKET),
+  `united state` (GPE) — `net income` (the biggest supernode) ranks #1.
+- **WCC** — 91.5 s, 3,099,773 docs in `gae_wcc` (field `component`): **3,322 components**,
+  one giant component of **3,091,396 nodes (99.7%)** with a small-component tail — the
+  graph is essentially one connected structure.
+
+Results are written to non-mutating `gae_<algorithm>` collections; raw summaries in
+`data/analytics_<algorithm>_<db>.json`. The GRAL ingress-readiness 404 that blocked the
+standalone orchestrator is handled here (readiness poll + transient-404 retry).
+
+**Pending:** the **agentic NL→insights** layer (requirements → use-cases → algorithm
+selection → execution → report) via the same package's agentic mode
+(`graph_analytics_ai/ai/agents/`, `run_agentic_workflow`), and running the base across the
+OneShard/Smart distributions.
 
 ## 5. Sizing (from data analysis)
 
@@ -408,7 +435,7 @@ Note: latency on the shared remote cluster is noisy (a single query has ranged
 | M4 | Benchmark suite + results | G5 (+ G7 cross-distribution) | **Done** — cross-distribution suite + results ([benchmark-report.md](benchmark-report.md)); SmartGraph decomposes the `net income` supernode ~250× on per-company queries; latency indicative on the shared cluster |
 | M5 | NL-query evaluation (Cypher→AQL / NL→Cypher via `arango-cypher-py` + GraphRAG) | G6, §4.6 | **Done (FinReflectKG-side)** — schema-aware **NL→Cypher front-end** run ([scripts/nl2cypher_eval.py](../scripts/nl2cypher_eval.py)): **19/22 transpile · 9/22 execute · 0 `MAPPING_NOT_FOUND`** (vs 14/22 · 7/22 for hand-written Cypher, [scripts/cypher_eval.py](../scripts/cypher_eval.py)). **GraphRAG answer synthesis 5/5** ([scripts/graphrag_rubric.py](../scripts/graphrag_rubric.py)). Root-caused the gold-set vocabulary mismatch against live data (sibling-schema rename `:RISK`→`RISK_FACTOR`; `ORG_REG` real but capped out of the top-20 ontology; `:METADATA` absent). Remaining upstream: transpiler ERR 1511 (multi-`WITH`), non-VCI AQL efficiency, analyzer entity cap, `reduce()` ([nl-graphrag.md](nl-graphrag.md)) |
 | M6 | Multi-distribution builds (OneShard + SmartGraph) | G7 | **Done** — OneShard and SmartGraph both built & verified ([multi-distribution-plan.md](multi-distribution-plan.md)) |
-| M7 | Graph analytics via GAE (deterministic jobs + agentic NL→insights) | G8, §4.7 | **Deferred (phase 2)** — GAE availability on ACP confirmed, `agentic-graph-analytics` chosen as the ACP-ready integration (both layers); implementation deferred |
+| M7 | Graph analytics via GAE (deterministic jobs + agentic NL→insights) | G8, §4.7 | **Partial** — deterministic base done & verified (PageRank + WCC end-to-end on 3.1 M nodes via `agentic-graph-analytics`, [scripts/analytics.py](../scripts/analytics.py)); agentic NL→insights layer pending |
 
 ## 8. Risks & open questions
 

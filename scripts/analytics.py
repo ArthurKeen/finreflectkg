@@ -1,21 +1,12 @@
 """Graph-analytics jobs over FinReflectKG via the ArangoDB Graph Analytics Engine (GAE).
 
-⚠️ DRAFT — DEFERRED (2026-07-29). This scaffold targets `graph-analytics-orchestrator`,
-which does NOT work against this cluster's GAE: FinReflectKG runs on the ArangoDB
-Platform (ACP), where the GAE engine deploys fine (`/gen-ai/v1/graphanalytics`) but its
-per-engine compute route (`/gral/<id>/v1/loaddata`) is only live ~30–60 s after deploy
-while the GRAL ingress rolls out. This orchestrator retries only ~3×/~12 s (by
-re-deploying), so `loaddata` 404s ("unknown path '/gral/..'"). The chosen path is
-`agentic-graph-analytics` (`graph_analytics_ai`), whose GAE client is ACP-ready
-(readiness polling + retry on that transient signature) and ships both a deterministic
-orchestrator mode and the agentic mode. See PRD §4.7. Re-point this at `graph_analytics_ai`
-when implementing; the AnalysisConfig (Node/relations LPG) and result-summary logic below
-carry over. The GAE itself IS available on the cluster.
-
-Intended design (both layers via `graph_analytics_ai`): a deterministic base (deploy →
-load → analyze → store → cleanup) that records results like the benchmark harness, with
-the agentic NL→insights mode on top — analogous to how the `nl2cypher` front-end sits on
-the `arango-cypher-py` transpiler.
+Deterministic base layer for graph analytics (PRD §4.7 / G8), via **agentic-graph-analytics**
+(`import graph_analytics_ai`) — its GAE client is ACP-ready: it polls for engine readiness
+and retries the transient GRAL-ingress `unknown path '/gral/..'` 404 that the standalone
+`graph-analytics-orchestrator` could not get past. Drives `GAEOrchestrator.run_analysis`
+(deploy → load → analyze → store → cleanup) and records results the way the benchmark
+harness does. The agentic NL→insights mode of the *same* package is the top layer,
+analogous to how the `nl2cypher` front-end sits on the `arango-cypher-py` transpiler.
 
 FinReflectKG is a labeled property graph: one vertex collection `Node` and one edge
 collection `relations`, so every algorithm runs on `vertex_collections=["Node"]`,
@@ -26,11 +17,11 @@ Deployment: **self-managed GAE** (GenAI Suite) — reuses the ArangoDB endpoint 
 (same `.env` connection); no extra credentials. Config: `GAE_DEPLOYMENT_MODE=self_managed`,
 `ARANGO_DATABASE` (the orchestrator's name for the target db).
 
-Usage (runs under .venv, which has graph-analytics-orchestrator + python-arango):
-  .venv/bin/python scripts/analytics.py                        # PageRank on FinReflectKG
-  .venv/bin/python scripts/analytics.py --algorithm wcc
-  .venv/bin/python scripts/analytics.py --algorithm pagerank --db FinReflectKgSmart --top 25
-  .venv/bin/python scripts/analytics.py --algorithm label_propagation --keep-engine
+Usage (runs under .venv311 — graph-analytics-ai requires py3.10+; has python-arango):
+  .venv311/bin/python scripts/analytics.py                        # PageRank on FinReflectKG
+  .venv311/bin/python scripts/analytics.py --algorithm wcc
+  .venv311/bin/python scripts/analytics.py --algorithm pagerank --db FinReflectKgSmart --top 25
+  .venv311/bin/python scripts/analytics.py --algorithm label_propagation --keep-engine
 
 NOTE: like cypher_eval.py, this must import python-arango's `arango` package (pulled in
 by the orchestrator), which shares its name with scripts/arango.py. We drop the scripts
@@ -57,7 +48,7 @@ LABELED = {"wcc", "scc", "label_propagation"}
 
 
 def _load_env():
-    from graph_analytics_orchestrator.config import load_env_vars
+    from graph_analytics_ai.config import load_env_vars
     load_env_vars()
     # The orchestrator reads ARANGO_DATABASE; our .env historically used ARANGO_DB.
     if not os.environ.get("ARANGO_DATABASE") and os.environ.get("ARANGO_DB"):
@@ -114,7 +105,7 @@ def main():
         os.environ["ARANGO_DATABASE"] = args.db
     db_name = os.environ.get("ARANGO_DATABASE", "FinReflectKG")
 
-    from graph_analytics_orchestrator import GAEOrchestrator, AnalysisConfig
+    from graph_analytics_ai import GAEOrchestrator, AnalysisConfig
 
     target = f"gae_{args.algorithm}"
     config = AnalysisConfig(
@@ -136,11 +127,14 @@ def main():
     result = orch.run_analysis(config)
 
     status = getattr(result.status, "value", str(result.status))
-    print(f"\nstatus={status}  duration={getattr(result, 'duration_seconds', None)}s  "
+    # With auto_cleanup, a successful run ends in 'cleaning_up' (COMPLETED -> CLEANING_UP
+    # on teardown); only 'failed' is a real failure.
+    ok = status != "failed"
+    print(f"\nstatus={status} ({'ok' if ok else 'FAILED'})  "
+          f"duration={getattr(result, 'duration_seconds', None)}s  "
           f"engine={getattr(result, 'engine_id', None)}  result_field={config.result_field}")
-    if status not in ("completed", "success", "COMPLETED"):
-        print(f"analysis did not complete cleanly: {getattr(result, 'error', None)}")
-        # still try to summarize whatever landed
+    if not ok:
+        print(f"analysis FAILED: {getattr(result, 'error', None)}")
 
     summary = {}
     try:
@@ -160,7 +154,7 @@ def main():
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({
         "db": db_name, "algorithm": args.algorithm, "target_collection": target,
-        "result_field": config.result_field, "status": status,
+        "result_field": config.result_field, "status": status, "ok": ok,
         "duration_seconds": getattr(result, "duration_seconds", None),
         "summary": summary,
     }, indent=2, default=str))
