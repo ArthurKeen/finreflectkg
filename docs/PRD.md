@@ -1,6 +1,6 @@
 # PRD — FinReflectKG on ArangoDB (Proof of Concept)
 
-**Status:** Draft v0.11 · 2026-07-29 (graph-analytics base implemented & verified — GAE PageRank + WCC end-to-end on all 3.1 M nodes via `agentic-graph-analytics`; agentic NL→insights layer pending — G8/§4.7)
+**Status:** Draft v0.12 · 2026-07-29 (graph-analytics base verified — GAE PageRank + WCC on all 3.1 M nodes; agentic NL→insights front-end verified — 10 use cases generated; full auto-execution blocked by a pinpointed serialization bug in `agentic-graph-analytics` — G8/§4.7)
 **Authors:** Arthur Keen (ArangoDB)
 **Related docs:** [data-analysis.md](data-analysis.md) · [etl-plan.md](etl-plan.md) ·
 [load-report.md](load-report.md) · [sharding-analysis.md](sharding-analysis.md) ·
@@ -11,6 +11,22 @@
 
 ## 0. Changelog
 
+- **v0.12 (2026-07-29):** **Agentic NL→insights front-end verified; full auto-execution
+  blocked by an upstream bug (G8, top layer).** Ran `agentic-graph-analytics`'s
+  `WorkflowOrchestrator.run_complete_workflow` ([scripts/analytics_agentic.py](../scripts/analytics_agentic.py))
+  over a business-requirements doc ([analytics-requirements.md](analytics-requirements.md)),
+  LLM via OpenRouter (default, `OPENROUTER_API_KEY`, no extra SDK). It completed 6 steps —
+  parse → extract requirements (conf 0.90) → extract/analyze schema → generate PRD →
+  **generate 10 graph-analytics use cases** correctly mapped to GAE algorithms (PageRank
+  centrality, WCC connectivity, label_propagation communities, betweenness bridges, scc)
+  and even predicted "net income, revenue … surfaced" (matching the base PageRank result).
+  Artifacts written: `data/analytics_agentic/{product_requirements,use_cases,schema_analysis}.md`.
+  The run then **FAILED before GAE auto-execution** on a one-line serialization bug in the
+  tool: `graph_analytics_ai/ai/workflow/state.py:220` `json.dump(self.to_dict(), …)` has no
+  enum handler, so the `DocumentType`/`UseCaseType` enum isn't JSON-serializable
+  (`default=str` fixes it). Bug is upstream in `agentic-graph-analytics` (v3.0). Base GAE
+  execution is already proven, so the agentic layer would produce the same results once
+  the tool bug is fixed.
 - **v0.11 (2026-07-29):** **Graph-analytics base layer implemented & verified (G8).**
   Resumed via **`agentic-graph-analytics`** (`import graph_analytics_ai`, ACP-ready)
   installed into `.venv311`; re-pointed [scripts/analytics.py](../scripts/analytics.py)
@@ -381,10 +397,19 @@ Results are written to non-mutating `gae_<algorithm>` collections; raw summaries
 `data/analytics_<algorithm>_<db>.json`. The GRAL ingress-readiness 404 that blocked the
 standalone orchestrator is handled here (readiness poll + transient-404 retry).
 
-**Pending:** the **agentic NL→insights** layer (requirements → use-cases → algorithm
-selection → execution → report) via the same package's agentic mode
-(`graph_analytics_ai/ai/agents/`, `run_agentic_workflow`), and running the base across the
-OneShard/Smart distributions.
+**Agentic layer (front-end verified 2026-07-29):** the **NL→insights** workflow
+([scripts/analytics_agentic.py](../scripts/analytics_agentic.py) →
+`WorkflowOrchestrator.run_complete_workflow`, LLM via OpenRouter) reads the
+business-requirements doc, analyzes the schema, and **generates 10 GAE use cases**
+correctly mapped to algorithms (PageRank, WCC, label_propagation, betweenness, scc) —
+outputs in `data/analytics_agentic/`. It then **fails before GAE auto-execution** on an
+upstream one-line serialization bug (`graph_analytics_ai/ai/workflow/state.py:220`
+`json.dump` lacks an enum handler → `DocumentType` not JSON-serializable; `default=str`
+fixes it). Since the base layer already proves GAE execution, the agentic layer will
+produce equivalent results once that bug is fixed.
+
+**Pending:** the upstream serialization fix (then a full agentic end-to-end run), and
+running the base across the OneShard/Smart distributions.
 
 ## 5. Sizing (from data analysis)
 
