@@ -166,7 +166,7 @@ Field meanings:
 - **`attributePath`**: the document attribute the rule keys off (e.g. `inferredRisk`, `dataSource`).
 - **`attributeType`**: `"number"` or `"string"`.
 - **`conditionType`**: `"singleValue"` for a single comparison (the only verified type).
-- **`condition.op`**: operator string — `">="`, `"<="`, `"<"`, `">"`, `"=="`, etc.
+- **`condition.op`**: operator string. **Equality is a single `"="`** — a `"=="` renders as an empty "Select condition" in the Attribute-based tab and the rule never matches (verified against the live Visualizer). Comparison operators are `">="`, `"<="`, `"<"`, `">"`.
 - **`condition.right`**: `{ "type": "literal", "value": <number-or-string> }` — the comparison value. Numbers are bare; strings are plain (no quotes).
 - **`condition.config`**: the style applied when the rule matches. Mirrors a node config (`background.color` / `background.iconName`, `labelAttribute`, `hoverInfoAttributes`, nested `rules: []`). `iconName` defaults to `"mdi:table"` even when unused.
 - **`condition.enabledFields`**: which parts of `config` are active — `{ "color": true/false, "icon": …, "labelAttribute": …, "hoverInfoAttributes": … }`. To color only, set `color: true` and the rest `false`.
@@ -216,7 +216,7 @@ the discriminator property** (the same rule schema documented above, with
 `attributePath: "type"`).
 
 This is exactly what the Visualizer UI's **"Attribute-based"** tab does — pick the
-property (`type`), operator (`==`), and a value (e.g. `SEGMENT`), then set Color / Icon
+property (`type`), operator (`=`), and a value (e.g. `SEGMENT`), then set Color / Icon
 / Label. Each such UI rule is one entry in the `rules` array:
 
 ```json
@@ -228,7 +228,7 @@ property (`type`), operator (`==`), and a value (e.g. `SEGMENT`), then set Color
     "rules": [                                 // one rule per styled `type` value
       { "id": "<uuid4>", "attributePath": "type", "attributeType": "string",
         "conditionType": "singleValue",
-        "condition": { "op": "==", "right": { "type": "literal", "value": "SEGMENT" },
+        "condition": { "op": "=", "right": { "type": "literal", "value": "SEGMENT" },
           "config": { "background": { "color": "#4a5568", "iconName": "mdi:chart-pie" },
                       "labelAttribute": "name", "hoverInfoAttributes": ["name","type"], "rules": [] },
           "enabledFields": { "color": true, "icon": true, "labelAttribute": false, "hoverInfoAttributes": false } } }
@@ -249,7 +249,7 @@ Edges are identical but keyed on the edge collection (e.g. `relations`) with
     "rules": [
       { "id": "<uuid4>", "attributePath": "type", "attributeType": "string",
         "conditionType": "singleValue",
-        "condition": { "op": "==", "right": { "type": "literal", "value": "operates_in" },
+        "condition": { "op": "=", "right": { "type": "literal", "value": "operates_in" },
           "config": { "lineStyle": { "color": "#4c51bf", "thickness": 1.0 }, "labelAttribute": "type", "hoverInfoAttributes": [], "rules": [] },
           "enabledFields": { "color": true, "icon": false, "labelAttribute": false, "hoverInfoAttributes": false } } }
     ]

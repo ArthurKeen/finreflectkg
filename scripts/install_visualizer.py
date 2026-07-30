@@ -332,7 +332,7 @@ def _node_rule(type_value, color, icon):
         "attributeType": "string",
         "conditionType": "singleValue",
         "condition": {
-            "op": "==",
+            "op": "=",  # single '=' is the Visualizer equality op; '==' renders as an empty condition (inert rule)
             "right": {"type": "literal", "value": type_value},
             "config": {
                 "background": {"color": color, "iconName": icon},
@@ -360,7 +360,7 @@ def _edge_rule(type_value, color):
         "attributeType": "string",
         "conditionType": "singleValue",
         "condition": {
-            "op": "==",
+            "op": "=",  # single '=' is the Visualizer equality op; '==' renders as an empty condition (inert rule)
             "right": {"type": "literal", "value": type_value},
             "config": {
                 "lineStyle": {"color": color, "thickness": 1.0},
