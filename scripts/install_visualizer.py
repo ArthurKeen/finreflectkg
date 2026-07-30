@@ -429,20 +429,34 @@ def install_theme():
     print(f"theme '{THEME_NAME}': {n_node} node rules, {n_edge} edge rules "
           f"(isDefault={THEME_AS_DEFAULT})")
 
-    # Plain fallback theme (no rules). Kept editable in the UI: it is the graph's
-    # default ONLY when the type theme is not (THEME_AS_DEFAULT off).
-    default_key = slug(f"{GRAPH}_Default")
-    upsert_doc("_graphThemeStore", default_key, {
-        "name": "Default", "graphId": GRAPH, "isDefault": not THEME_AS_DEFAULT,
-        "nodeConfigMap": {"Node": {"background": {"color": NODE_BASE_COLOR,
-                          "iconName": "mdi:circle-outline"},
-                          "labelAttribute": "name", "hoverInfoAttributes": ["name", "type"],
-                          "rules": []}},
-        "edgeConfigMap": {"relations": {"lineStyle": {"color": EDGE_BASE_COLOR, "thickness": 1.0},
-                          "labelAttribute": "type",
-                          "arrowStyle": {"sourceArrowShape": "none", "targetArrowShape": "triangle"},
-                          "labelStyle": {"color": "#1d2531"}, "hoverInfoAttributes": [], "rules": []}},
-    })
+    # Plain fallback default theme. The Visualizer AUTO-CREATES its own "Default"
+    # theme (name "Default", description "Default graph theme") the first time the
+    # graph is opened in the UI, so blindly adding our own leaves TWO "Default"
+    # entries in the Legend. Reuse an existing "Default" if present (prefer the
+    # built-in, identified by its description), dedupe any extras, and only create
+    # our own when none exists yet.
+    dup = _cursor(
+        "FOR t IN _graphThemeStore FILTER t.graphId == @g AND t.name == 'Default' "
+        "SORT t.description == 'Default graph theme' DESC, t._key RETURN t._key",
+        {"g": GRAPH})
+    if dup:
+        default_key = dup[0]                       # keep the built-in if one exists
+        for extra in dup[1:]:                      # drop redundant duplicate Defaults
+            req("DELETE", f"/_api/document/_graphThemeStore/{extra}", db=DB)
+            print(f"reconcile: removed duplicate Default theme {extra}")
+    else:
+        default_key = slug(f"{GRAPH}_Default")
+        upsert_doc("_graphThemeStore", default_key, {
+            "name": "Default", "graphId": GRAPH, "isDefault": not THEME_AS_DEFAULT,
+            "nodeConfigMap": {"Node": {"background": {"color": NODE_BASE_COLOR,
+                              "iconName": "mdi:circle-outline"},
+                              "labelAttribute": "name", "hoverInfoAttributes": ["name", "type"],
+                              "rules": []}},
+            "edgeConfigMap": {"relations": {"lineStyle": {"color": EDGE_BASE_COLOR, "thickness": 1.0},
+                              "labelAttribute": "type",
+                              "arrowStyle": {"sourceArrowShape": "none", "targetArrowShape": "triangle"},
+                              "labelStyle": {"color": "#1d2531"}, "hoverInfoAttributes": [], "rules": []}},
+        })
 
     # Enforce exactly one isDefault:true for this graph (Visualizer corrupts with
     # zero or multiple). The intended default is the type theme, or the plain

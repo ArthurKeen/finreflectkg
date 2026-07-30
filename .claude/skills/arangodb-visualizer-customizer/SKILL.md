@@ -621,11 +621,14 @@ For **ontology graphs** (Class, Property, Ontology, ObjectProperty, etc.):
 - The theme is marked `isDefault: true`. Set it to `false` (and make the built-in `Default` theme the default instead), then reload the Visualizer and re-edit.
 
 ### Icons show as generic shapes
-- Wrong field structure. Use `"background": {"color": "#hex", "iconName": "fa6-solid:user"}`. NOT flat `"color"`, `"icon"`.
-- Invalid FA6 icon name — must start with `fa6-solid:` or `fa6-regular:`.
+- Wrong field structure. Use `"background": {"color": "#hex", "iconName": "mdi:account"}`. NOT flat `"color"`, `"icon"`.
+- Unresolvable icon set. The current Visualizer resolves `mdi:` (Material Design Icons); `fa6-solid:` / `fa6-regular:` did **not** resolve in at least one deployment — the rule config is rejected and the node falls back to the generic glyph. Prefer `mdi:`; confirm by authoring one rule in the UI and reading back the stored `iconName`.
+
+### Two "Default" themes in the Legend
+- The Visualizer AUTO-CREATES its own "Default" theme (name "Default", description "Default graph theme") the first time the graph is opened. If your installer *also* unconditionally creates a plain "Default", you end up with two. **Fix:** query for an existing "Default" for the graph, reuse it (prefer the built-in — identify it by `description == "Default graph theme"`), delete any extras, and only create your own when none exists. Reference: `install_theme()` in `FinReflectKG/scripts/install_visualizer.py`.
 
 ### Default theme lost after database recreation
-- Always install a plain "Default" theme (`isDefault: false`) alongside custom themes.
+- The Visualizer recreates its built-in "Default" when the graph is next opened, so prefer reusing it (see above). Only create your own plain "Default" (`isDefault: false`) when none exists — creating one unconditionally duplicates the built-in.
 
 ### `edge_definitions()` key ambiguity (python-arango vs AQL)
 - `g.edge_definitions()` (python-arango SDK) returns dicts with key `"edge_collection"`.
