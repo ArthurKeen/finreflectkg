@@ -1,10 +1,13 @@
 """Agentic graph-analytics over FinReflectKG (PRD §4.7 / G8, top layer).
 
-The **agentic NL→insights layer** on top of the deterministic base (scripts/analytics.py).
+The **agentic NL→plan layer** on top of the deterministic base (scripts/analytics.py).
 Drives `agentic-graph-analytics`'s `WorkflowOrchestrator.run_complete_workflow`: it reads a
-business-requirements document, inspects the FinReflectKG schema, generates graph-analytics
-use cases (LLM), selects + runs GAE algorithms, and produces an intelligence report —
-analogous to how `nl2cypher` is the NL front-end over the `arango-cypher-py` transpiler.
+business-requirements document, inspects the FinReflectKG schema, and generates
+graph-analytics **use cases mapped to GAE algorithms** (LLM) — the analysis *plan*. This
+orchestrator's 7 steps end at `save_outputs` (use cases); it does NOT itself run the GAE
+algorithms — that is the deterministic base (`scripts/analytics.py`, which the plan's
+algorithms feed into). Analogous to how `nl2cypher` is the NL front-end over the
+`arango-cypher-py` transpiler.
 
 LLM: resolved from the environment via the package's factory (`LLM_PROVIDER`, default
 `openrouter`, using `OPENROUTER_API_KEY` — already in `.env`; requests-based, no extra SDK).

@@ -1,6 +1,6 @@
 # PRD — FinReflectKG on ArangoDB (Proof of Concept)
 
-**Status:** Draft v0.12 · 2026-07-29 (graph-analytics base verified — GAE PageRank + WCC on all 3.1 M nodes; agentic NL→insights front-end verified — 10 use cases generated; full auto-execution blocked by a pinpointed serialization bug in `agentic-graph-analytics` — G8/§4.7)
+**Status:** Draft v0.13 · 2026-07-30 (graph analytics: GAE base verified — PageRank + WCC on 3.1 M nodes; agentic **planning** pipeline now completes end-to-end — 10 GAE use cases from NL requirements, after fixing 2 upstream bugs in `agentic-graph-analytics` — G8/§4.7)
 **Authors:** Arthur Keen (ArangoDB)
 **Related docs:** [data-analysis.md](data-analysis.md) · [etl-plan.md](etl-plan.md) ·
 [load-report.md](load-report.md) · [sharding-analysis.md](sharding-analysis.md) ·
@@ -11,6 +11,21 @@
 
 ## 0. Changelog
 
+- **v0.13 (2026-07-30):** **Agentic planning pipeline completes end-to-end (G8 top
+  layer).** Fixed two upstream bugs in `agentic-graph-analytics` (`graph_analytics_ai`):
+  (1) `state.py`/report `json.dump` lacked `default=str` (enum not serializable), and
+  (2) `steps.py` referenced `ExtractedRequirements.all_requirements` (the attribute is
+  `requirements`). `WorkflowOrchestrator.run_complete_workflow` now **COMPLETES all 7
+  steps in ~23 s** — NL requirements → schema analysis → **10 GAE use cases mapped to
+  algorithms** (PageRank, WCC, label_propagation, betweenness, scc); artifacts in
+  `data/analytics_agentic/`. **Scope clarified:** this orchestrator is the **planning**
+  layer (its steps end at `save_outputs`/use-cases); GAE **execution** is the
+  deterministic base ([scripts/analytics.py](../scripts/analytics.py), verified) that the
+  plan's algorithms feed into. The fully-autonomous NL→execute→report loop is a separate
+  mode of the tool (`graph_analytics_ai/ai/agents/`), not wired here. *(Also fixed this
+  repo's PRD-drift gate: `drift_queue.py` was queuing cross-repo edits — now scoped to
+  files inside this repo, excluding `.claude/`; `drift_stop_gate.sh` PRD-count `0\n0`
+  glitch cleaned. `.claude/` is gitignored so those are local-only.)*
 - **v0.12 (2026-07-29):** **Agentic NL→insights front-end verified; full auto-execution
   blocked by an upstream bug (G8, top layer).** Ran `agentic-graph-analytics`'s
   `WorkflowOrchestrator.run_complete_workflow` ([scripts/analytics_agentic.py](../scripts/analytics_agentic.py))
@@ -154,7 +169,7 @@ This is a POC to load that dataset into a managed ArangoDB deployment and evalua
 | G5 | Query-performance baseline | A benchmark suite of representative graph queries with recorded latencies (see §6) | **Done** — suite ([scripts/benchmark.py](../scripts/benchmark.py)) run across all three distributions; deterministic scanned-edge + explain-locality metrics recorded ([benchmark-report.md](benchmark-report.md)) |
 | G6 | NL-query readiness | Source-text chunks joinable from every edge; **Cypher→AQL / NL→Cypher via `arango-cypher-py`** (§4.6) + GraphRAG grounding | **Done (FinReflectKG-side)** — NL→Cypher **front-end** run ([scripts/nl2cypher_eval.py](../scripts/nl2cypher_eval.py)): **19/22 transpile, 9/22 execute, 0 `MAPPING_NOT_FOUND`** (vocabulary gap closed); hand-written Cypher path 14/22 · 7/22 ([scripts/cypher_eval.py](../scripts/cypher_eval.py)); GraphRAG grounding 24/24 + **answer synthesis 5/5** ([scripts/graphrag.py](../scripts/graphrag.py), [scripts/graphrag_rubric.py](../scripts/graphrag_rubric.py)); gold-set AQL runner 21/22. Remaining ceiling is upstream (transpiler bugs, non-VCI AQL efficiency, analyzer cap) — see [nl-graphrag.md](nl-graphrag.md) |
 | G7 | Multiple distributions for comparative scale benchmarking | Same dataset built as a **OneShard** db (`FinReflectKgOneShard`) and a **sharded SmartGraph** db (`FinReflectKgSmart`) alongside the baseline `FinReflectKG`; sharding verified (see §4.5) | **Done** — OneShard and SmartGraph both built & verified ([multi-distribution-plan.md](multi-distribution-plan.md)) |
-| G8 | Graph analytics over the graph (GAE): centrality/PageRank, connected components (WCC/SCC), community detection — deterministic jobs + an agentic NL→insights layer | Reproducible GAE jobs on `Node`/`relations` with recorded results (non-mutating result collections), plus an NL/requirements→insights flow (see §4.7) | **Partial** — deterministic base **implemented & verified** ([scripts/analytics.py](../scripts/analytics.py)): PageRank + WCC run end-to-end on all 3.1 M nodes via `agentic-graph-analytics` (self-managed ACP GAE); agentic NL→insights layer pending |
+| G8 | Graph analytics over the graph (GAE): centrality/PageRank, connected components (WCC/SCC), community detection — deterministic jobs + an agentic NL→insights layer | Reproducible GAE jobs on `Node`/`relations` with recorded results (non-mutating result collections), plus an NL/requirements→insights flow (see §4.7) | **Partial** — deterministic base **verified** ([scripts/analytics.py](../scripts/analytics.py)): PageRank + WCC end-to-end on all 3.1 M nodes (self-managed ACP GAE); agentic **planning** layer **completes** ([scripts/analytics_agentic.py](../scripts/analytics_agentic.py)): NL requirements → 10 GAE use cases. Remaining (optional): the fully-autonomous NL→execute→report loop |
 
 ### Non-goals (this phase)
 
@@ -397,19 +412,21 @@ Results are written to non-mutating `gae_<algorithm>` collections; raw summaries
 `data/analytics_<algorithm>_<db>.json`. The GRAL ingress-readiness 404 that blocked the
 standalone orchestrator is handled here (readiness poll + transient-404 retry).
 
-**Agentic layer (front-end verified 2026-07-29):** the **NL→insights** workflow
+**Agentic planning layer (completes end-to-end 2026-07-30):** the **NL→plan** workflow
 ([scripts/analytics_agentic.py](../scripts/analytics_agentic.py) →
 `WorkflowOrchestrator.run_complete_workflow`, LLM via OpenRouter) reads the
 business-requirements doc, analyzes the schema, and **generates 10 GAE use cases**
-correctly mapped to algorithms (PageRank, WCC, label_propagation, betweenness, scc) —
-outputs in `data/analytics_agentic/`. It then **fails before GAE auto-execution** on an
-upstream one-line serialization bug (`graph_analytics_ai/ai/workflow/state.py:220`
-`json.dump` lacks an enum handler → `DocumentType` not JSON-serializable; `default=str`
-fixes it). Since the base layer already proves GAE execution, the agentic layer will
-produce equivalent results once that bug is fixed.
+mapped to algorithms (PageRank, WCC, label_propagation, betweenness, scc) — the analysis
+*plan* — in ~23 s (`data/analytics_agentic/`). Two upstream bugs in
+`agentic-graph-analytics` were fixed to get here: a `json.dump` missing `default=str`
+(enum not serializable) and `steps.py` using `ExtractedRequirements.all_requirements`
+(attr is `requirements`). This orchestrator's steps end at `save_outputs`, so it plans
+but does **not** run the algorithms — GAE **execution** is the base layer above, which the
+plan's algorithms feed into (all 5 selected algorithms are supported by `analytics.py`).
 
-**Pending:** the upstream serialization fix (then a full agentic end-to-end run), and
-running the base across the OneShard/Smart distributions.
+**Pending (optional):** the fully-autonomous NL→execute→report loop (the tool's
+`graph_analytics_ai/ai/agents/` mode, or glue that feeds the agentic plan into
+`analytics.py`), and running the base across the OneShard/Smart distributions.
 
 ## 5. Sizing (from data analysis)
 
@@ -460,7 +477,7 @@ Note: latency on the shared remote cluster is noisy (a single query has ranged
 | M4 | Benchmark suite + results | G5 (+ G7 cross-distribution) | **Done** — cross-distribution suite + results ([benchmark-report.md](benchmark-report.md)); SmartGraph decomposes the `net income` supernode ~250× on per-company queries; latency indicative on the shared cluster |
 | M5 | NL-query evaluation (Cypher→AQL / NL→Cypher via `arango-cypher-py` + GraphRAG) | G6, §4.6 | **Done (FinReflectKG-side)** — schema-aware **NL→Cypher front-end** run ([scripts/nl2cypher_eval.py](../scripts/nl2cypher_eval.py)): **19/22 transpile · 9/22 execute · 0 `MAPPING_NOT_FOUND`** (vs 14/22 · 7/22 for hand-written Cypher, [scripts/cypher_eval.py](../scripts/cypher_eval.py)). **GraphRAG answer synthesis 5/5** ([scripts/graphrag_rubric.py](../scripts/graphrag_rubric.py)). Root-caused the gold-set vocabulary mismatch against live data (sibling-schema rename `:RISK`→`RISK_FACTOR`; `ORG_REG` real but capped out of the top-20 ontology; `:METADATA` absent). Remaining upstream: transpiler ERR 1511 (multi-`WITH`), non-VCI AQL efficiency, analyzer entity cap, `reduce()` ([nl-graphrag.md](nl-graphrag.md)) |
 | M6 | Multi-distribution builds (OneShard + SmartGraph) | G7 | **Done** — OneShard and SmartGraph both built & verified ([multi-distribution-plan.md](multi-distribution-plan.md)) |
-| M7 | Graph analytics via GAE (deterministic jobs + agentic NL→insights) | G8, §4.7 | **Partial** — deterministic base done & verified (PageRank + WCC end-to-end on 3.1 M nodes via `agentic-graph-analytics`, [scripts/analytics.py](../scripts/analytics.py)); agentic NL→insights layer pending |
+| M7 | Graph analytics via GAE (deterministic jobs + agentic NL→insights) | G8, §4.7 | **Partial** — base verified (PageRank + WCC on 3.1 M nodes, [scripts/analytics.py](../scripts/analytics.py)); agentic planning completes (NL → 10 use cases, [scripts/analytics_agentic.py](../scripts/analytics_agentic.py)); autonomous execute→report loop optional/pending |
 
 ## 8. Risks & open questions
 
