@@ -264,6 +264,45 @@ def slug(s):
     return out.strip("_")
 
 
+def _cursor(query, bind_vars=None):
+    """Run a read-only AQL query and return its result list (empty on error)."""
+    status, body = req("POST", "/_api/cursor",
+                       {"query": query, "bindVars": bind_vars or {}}, db=DB)
+    return body.get("result", []) if status in (200, 201) else []
+
+
+# --------------------------------------------------------------------------- #
+# Reconciliation — the installer upserts, so a query/action REMOVED from the
+# lists below would otherwise orphan its documents (and viewpoint edges) forever.
+# These helpers delete our own stale docs on re-run, scoped by key namespace so
+# the Visualizer's own built-in docs (numeric keys) are never touched.
+# --------------------------------------------------------------------------- #
+def reconcile_namespace(coll, keep_keys, edge_coll=None):
+    """Drop docs in `coll` under this graph's key prefix that weren't installed
+    this run, plus any `edge_coll` viewpoint edges pointing at them."""
+    ns = slug(GRAPH) + "_"
+    for k in _cursor("FOR d IN @@c FILTER STARTS_WITH(d._key, @ns) RETURN d._key",
+                     {"@c": coll, "ns": ns}):
+        if k in keep_keys:
+            continue
+        if edge_coll:
+            for e in _cursor("FOR e IN @@e FILTER e._to == @to RETURN e._key",
+                             {"@e": edge_coll, "to": f"{coll}/{k}"}):
+                req("DELETE", f"/_api/document/{edge_coll}/{e}", db=DB)
+        req("DELETE", f"/_api/document/{coll}/{k}", db=DB)
+        print(f"reconcile: removed stale {coll}/{k}")
+
+
+def reconcile_editor_queries(keep_keys):
+    """`_editor_saved_queries` has no graphId and uses a fixed 'finreflectkg_'
+    key prefix across all distributions; reconcile within that namespace only."""
+    for k in _cursor("FOR d IN _editor_saved_queries "
+                     "FILTER STARTS_WITH(d._key, 'finreflectkg_') RETURN d._key"):
+        if k not in keep_keys:
+            req("DELETE", f"/_api/document/_editor_saved_queries/{k}", db=DB)
+            print(f"reconcile: removed stale _editor_saved_queries/{k}")
+
+
 # --------------------------------------------------------------------------- #
 # Viewpoint — canvas actions and saved queries only surface once linked to one.
 # --------------------------------------------------------------------------- #
@@ -476,28 +515,24 @@ FOR risk IN Node
     {
         "key": "dependency_chains_3hop",
         "name": "3-hop dependency chains (org → org → org → org)",
+        # Seed from `depends_on` ORG→ORG edges (bounded, index-backed via the
+        # type-leading VCI) rather than scanning EVERY ORG node — the original
+        # unbounded `FOR org IN Node FILTER type=="ORG"` outer loop timed out
+        # (query killed) on the baseline/OneShard cluster.
         "aql": """WITH Node
-FOR org IN Node
-  FILTER org.type == "ORG" AND org.name != null
-  FOR v, e, p IN 3..3 OUTBOUND org relations OPTIONS {bfs: true, uniqueVertices: "path"}
+FOR seed IN relations
+  FILTER seed.type == "depends_on" AND seed._fromType == "ORG" AND seed._toType == "ORG"
+  LIMIT 3000
+  FOR v, e, p IN 3..3 OUTBOUND seed._from relations OPTIONS {bfs: true, uniqueVertices: "path"}
     FILTER p.edges[*].type ALL == "depends_on"
     FILTER p.edges[*]._toType ALL == "ORG"
     LIMIT 15
     RETURN p""",
     },
-    {
-        "key": "circular_dependencies_bigtech",
-        "name": "Circular dependencies among big-tech firms",
-        "aql": """WITH Node
-LET majors = ["aapl", "msft", "googl", "amzn", "tsla"]
-FOR org IN Node
-  FILTER org.type == "ORG" AND org.name IN majors
-  FOR v, e, p IN 2..3 OUTBOUND org relations OPTIONS {uniqueVertices: "path"}
-    FILTER p.edges[*].type ALL == "depends_on"
-    FILTER v._key == org._key
-    LIMIT 10
-    RETURN p""",
-    },
+    # NOTE: a "circular dependencies among big-tech firms" query was removed —
+    # the dataset contains no `depends_on` cycles among aapl/msft/googl/amzn/tsla
+    # (verified), and a global cycle search is prohibitively expensive here, so
+    # the query could only ever return empty. Reinstate only if the data changes.
     {
         "key": "company_year_slice",
         "name": "Company-year disclosure slice (edit ticker/year)",
@@ -518,19 +553,27 @@ def install_saved_queries(vp_id):
     ensure_collection("_queries")
     ensure_collection("_viewpointQueries", edge=True)
     ensure_collection("_editor_saved_queries")
+    query_keys, editor_keys = set(), set()
     for q in SAVED_QUERIES:
         qkey = slug(f"{GRAPH}_{q['key']}")
+        query_keys.add(qkey)
         qid = upsert_doc("_queries", qkey, {
             "name": q["name"], "title": q["name"], "graphId": GRAPH,
             "queryText": q["aql"], "bindVariables": {},
         })
         upsert_edge("_viewpointQueries", slug(f"{vp_id}_{qkey}"), vp_id, qid)
         # Also expose in the global AQL editor sidebar (different collection/fields).
-        upsert_doc("_editor_saved_queries", slug(f"finreflectkg_{q['key']}"), {
+        ekey = slug(f"finreflectkg_{q['key']}")
+        editor_keys.add(ekey)
+        upsert_doc("_editor_saved_queries", ekey, {
             "name": q["name"], "title": q["name"],
             "content": q["aql"], "value": q["aql"],
             "bindVariables": {}, "databaseName": DB,
         })
+    # Self-heal: drop any query retired from SAVED_QUERIES (e.g. the removed
+    # circular-dependencies query) so re-runs don't leave stale docs behind.
+    reconcile_namespace("_queries", query_keys, edge_coll="_viewpointQueries")
+    reconcile_editor_queries(editor_keys)
     print(f"saved queries: {len(SAVED_QUERIES)} in _queries + _editor_saved_queries")
 
 
@@ -634,13 +677,16 @@ FOR node IN @nodes
 def install_canvas_actions(vp_id):
     ensure_collection("_canvasActions")
     ensure_collection("_viewpointActions", edge=True)
+    action_keys = set()
     for a in CANVAS_ACTIONS:
         akey = slug(f"{GRAPH}_{a['key']}")
+        action_keys.add(akey)
         aid = upsert_doc("_canvasActions", akey, {
             "name": a["name"], "description": a["name"], "graphId": GRAPH,
             "queryText": a["aql"], "bindVariables": {"nodes": []},
         })
         upsert_edge("_viewpointActions", slug(f"{vp_id}_{akey}"), vp_id, aid)
+    reconcile_namespace("_canvasActions", action_keys, edge_coll="_viewpointActions")
     print(f"canvas actions: {len(CANVAS_ACTIONS)} in _canvasActions")
 
 
