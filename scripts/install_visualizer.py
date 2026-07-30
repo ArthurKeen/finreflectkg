@@ -582,10 +582,24 @@ def install_saved_queries(vp_id):
 # (full path) so the start node, edge, and neighbour all render. Derived from the
 # relationship motifs in the saved queries above.
 # --------------------------------------------------------------------------- #
+def action_name(types, base):
+    """Compose the display name '[<types>] <base>'. The Visualizer shows EVERY
+    canvas action on EVERY node's right-click menu (it does not filter by node
+    type), so the bracketed applicable-type list is the analyst's only cue for
+    which node types an action is meaningful on. Use ["*"] for actions that apply
+    to any node. `types` are the LPG `Node.type` values the traversal is rooted
+    on, stored verbatim in `applicableTypes` so name and field never drift."""
+    return f"[{', '.join(types)}] {base}"
+
+
+# Each action carries `types` (the Node.type values it is designed for — the
+# root/right-clicked node, ["*"] for any) and a `base` name; install_canvas_actions
+# composes the `[types] base` display name and stores `applicableTypes`.
 CANVAS_ACTIONS = [
     {
         "key": "expand_all_1hop",
-        "name": "Expand: all neighbors (1 hop)",
+        "types": ["*"],
+        "base": "Expand: all neighbors (1 hop)",
         "aql": """WITH Node
 FOR node IN @nodes
   FOR v, e, p IN 1..1 ANY node relations
@@ -594,7 +608,8 @@ FOR node IN @nodes
     },
     {
         "key": "expand_all_2hop",
-        "name": "Expand: 2-hop neighborhood",
+        "types": ["*"],
+        "base": "Expand: 2-hop neighborhood",
         "aql": """WITH Node
 FOR node IN @nodes
   FOR v, e IN 1..2 ANY node relations
@@ -603,7 +618,8 @@ FOR node IN @nodes
     },
     {
         "key": "expand_discloses_out",
-        "name": "Expand: metrics this discloses",
+        "types": ["ORG"],
+        "base": "Expand: metrics this discloses",
         "aql": """WITH Node
 FOR node IN @nodes
   FOR v, e, p IN 1..1 OUTBOUND node relations
@@ -613,7 +629,8 @@ FOR node IN @nodes
     },
     {
         "key": "expand_discloses_in",
-        "name": "Expand: who discloses this",
+        "types": ["FIN_METRIC"],
+        "base": "Expand: who discloses this",
         "aql": """WITH Node
 FOR node IN @nodes
   FOR v, e, p IN 1..1 INBOUND node relations
@@ -623,7 +640,8 @@ FOR node IN @nodes
     },
     {
         "key": "expand_operates_in",
-        "name": "Expand: operates in (geographies)",
+        "types": ["ORG"],
+        "base": "Expand: operates in (geographies)",
         "aql": """WITH Node
 FOR node IN @nodes
   FOR v, e, p IN 1..1 OUTBOUND node relations
@@ -633,7 +651,8 @@ FOR node IN @nodes
     },
     {
         "key": "expand_has_stake_in",
-        "name": "Expand: companies this has a stake in",
+        "types": ["ORG"],
+        "base": "Expand: companies this has a stake in",
         "aql": """WITH Node
 FOR node IN @nodes
   FOR v, e, p IN 1..1 OUTBOUND node relations
@@ -643,7 +662,8 @@ FOR node IN @nodes
     },
     {
         "key": "expand_stakeholders_in",
-        "name": "Expand: who has a stake in this",
+        "types": ["COMP", "FIN_INST", "ORG"],
+        "base": "Expand: who has a stake in this",
         "aql": """WITH Node
 FOR node IN @nodes
   FOR v, e, p IN 1..1 INBOUND node relations
@@ -653,7 +673,8 @@ FOR node IN @nodes
     },
     {
         "key": "expand_depends_on",
-        "name": "Expand: depends on",
+        "types": ["ORG"],
+        "base": "Expand: depends on",
         "aql": """WITH Node
 FOR node IN @nodes
   FOR v, e, p IN 1..1 OUTBOUND node relations
@@ -663,7 +684,8 @@ FOR node IN @nodes
     },
     {
         "key": "expand_negatively_impacted_by",
-        "name": "Expand: negatively impacted by",
+        "types": ["FIN_METRIC", "ORG"],
+        "base": "Expand: negatively impacted by",
         "aql": """WITH Node
 FOR node IN @nodes
   FOR v, e, p IN 1..1 INBOUND node relations
@@ -681,8 +703,10 @@ def install_canvas_actions(vp_id):
     for a in CANVAS_ACTIONS:
         akey = slug(f"{GRAPH}_{a['key']}")
         action_keys.add(akey)
+        name = action_name(a["types"], a["base"])
         aid = upsert_doc("_canvasActions", akey, {
-            "name": a["name"], "description": a["name"], "graphId": GRAPH,
+            "name": name, "description": name, "graphId": GRAPH,
+            "applicableTypes": a["types"],
             "queryText": a["aql"], "bindVariables": {"nodes": []},
         })
         upsert_edge("_viewpointActions", slug(f"{vp_id}_{akey}"), vp_id, aid)
