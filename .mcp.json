@@ -4,7 +4,14 @@
       "command": "bash",
       "args": [
         "-c",
-        "cd /Users/arthurkeen/code/FinReflectKG && set -a && . ./.env && set +a && export ARANGO_HOSTS=\"$ARANGO_ENDPOINT\" ARANGO_ROOT_USERNAME=\"$ARANGO_USER\" ARANGO_ROOT_PASSWORD=\"$ARANGO_PASSWORD\" ARANGO_DEFAULT_DB_NAME=\"${ARANGO_DB:-FinReflectKG}\" && cd /Users/arthurkeen/code/arango-solutions-mcp-server && exec .venv/bin/python main.py"
+        "cd /Users/arthurkeen/code/FinReflectKG && set -a && . ./.env && set +a && export ARANGO_HOSTS=\"$ARANGO_ENDPOINT\" ARANGO_ROOT_USERNAME=\"$ARANGO_USER\" ARANGO_ROOT_PASSWORD=\"$ARANGO_PASSWORD\" ARANGO_DEFAULT_DB_NAME=\"${ARANGO_DB:-FinReflectKG}\" && cd /Users/arthurkeen/code/arango-solutions-mcp-server && export MCP_PROFILE=developer && exec .venv/bin/arangodb-mcp"
+      ]
+    },
+    "finreflectkg-temporal-mcp": {
+      "command": "bash",
+      "args": [
+        "-c",
+        "cd /Users/arthurkeen/code/FinReflectKG && set -a && . ./.env && set +a && export ARANGO_HOSTS=\"$ARANGO_ENDPOINT\" ARANGO_ROOT_USERNAME=\"$ARANGO_USER\" ARANGO_ROOT_PASSWORD=\"$ARANGO_PASSWORD\" ARANGO_DEFAULT_DB_NAME=\"FinReflectKgTemporal\" && cd /Users/arthurkeen/code/arango-solutions-mcp-server && export MCP_PROFILE=developer && exec .venv/bin/arangodb-mcp"
       ]
     }
   }

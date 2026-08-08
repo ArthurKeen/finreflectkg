@@ -11,6 +11,17 @@
 
 ## 0. Changelog
 
+- **v0.15 (2026-08-08):** **Time-travel layer built + validated (G9/§4.8 — Done, M8).**
+  Built `FinReflectKgTemporal` (OneShard) via [scripts/build_temporal.sh](../scripts/build_temporal.sh):
+  augmented all **17,513,372** relations edges with numeric `validFrom`/`validTo`, created the MDI +
+  composite `validFrom` VCIs + named graph. **Validation green**
+  ([scripts/validate_temporal.py](../scripts/validate_temporal.py)): counts reconcile, 0 edges missing
+  temporal fields, **as-of query is MDI-backed** (confirmed via `explain`), AAPL `operates_in` as-of =
+  48 (2014) / 76 (2018) / 85 (2024). **Data-quality fix:** ~654 K edges had OCR-noisy start years
+  (e.g. 1163 / 8176) that parse cleanly but would pollute snapshots — `validFrom` is clamped to the
+  filing year when the parsed start is outside [2013, 2026] (`endDate` left lenient for real
+  far-future maturities); 108,914 degenerate spans repaired. Added a `finreflectkg-temporal-mcp`
+  convenience MCP entry (default DB `FinReflectKgTemporal`).
 - **v0.14 (2026-08-07):** **Time-travel layer scoped + P0-verified (G9/§4.8, M8).**
   10 fiscal years of 10-Ks ⇒ point-in-time reconstruction. Design: numeric valid-time
   `validFrom`/`validTo` (`YYYYMM` ints, `NEVER_EXPIRES=999912`) **directly on `relations`**
@@ -182,7 +193,7 @@ This is a POC to load that dataset into a managed ArangoDB deployment and evalua
 | G6 | NL-query readiness | Source-text chunks joinable from every edge; **Cypher→AQL / NL→Cypher via `arango-cypher-py`** (§4.6) + GraphRAG grounding | **Done (FinReflectKG-side)** — NL→Cypher **front-end** run ([scripts/nl2cypher_eval.py](../scripts/nl2cypher_eval.py)): **19/22 transpile, 9/22 execute, 0 `MAPPING_NOT_FOUND`** (vocabulary gap closed); hand-written Cypher path 14/22 · 7/22 ([scripts/cypher_eval.py](../scripts/cypher_eval.py)); GraphRAG grounding 24/24 + **answer synthesis 5/5** ([scripts/graphrag.py](../scripts/graphrag.py), [scripts/graphrag_rubric.py](../scripts/graphrag_rubric.py)); gold-set AQL runner 21/22. Remaining ceiling is upstream (transpiler bugs, non-VCI AQL efficiency, analyzer cap) — see [nl-graphrag.md](nl-graphrag.md) |
 | G7 | Multiple distributions for comparative scale benchmarking | Same dataset built as a **OneShard** db (`FinReflectKgOneShard`) and a **sharded SmartGraph** db (`FinReflectKgSmart`) alongside the baseline `FinReflectKG`; sharding verified (see §4.5) | **Done** — OneShard and SmartGraph both built & verified ([multi-distribution-plan.md](multi-distribution-plan.md)) |
 | G8 | Graph analytics over the graph (GAE): centrality/PageRank, connected components (WCC/SCC), community detection — deterministic jobs + an agentic NL→insights layer | Reproducible GAE jobs on `Node`/`relations` with recorded results (non-mutating result collections), plus an NL/requirements→insights flow (see §4.7) | **Partial** — deterministic base **verified** ([scripts/analytics.py](../scripts/analytics.py)): PageRank + WCC end-to-end on all 3.1 M nodes (self-managed ACP GAE); agentic **planning** layer **completes** ([scripts/analytics_agentic.py](../scripts/analytics_agentic.py)): NL requirements → 10 GAE use cases. Remaining (optional): the fully-autonomous NL→execute→report loop |
-| G9 | **Time-travel (temporal) queries** — point-in-time as-of, current-state, and year-over-year diff over the 10 fiscal years | Numeric `validFrom`/`validTo` on `relations` + an MDI temporal index; as-of / current / diff queries return correct rows and are index-backed (MDI for unbounded, persistent composite for node-anchored — verified §4.8); built in `FinReflectKgTemporal` | **Planned** — design + P0 `explain` spike done (§4.8); build is M8 |
+| G9 | **Time-travel (temporal) queries** — point-in-time as-of, current-state, and year-over-year diff over the 10 fiscal years | Numeric `validFrom`/`validTo` on `relations` + an MDI temporal index; as-of / current / diff queries return correct rows and are index-backed (MDI for unbounded, persistent composite for node-anchored — verified §4.8); built in `FinReflectKgTemporal` | **Done** — `FinReflectKgTemporal` (OneShard) built & validated: 17.51 M edges carry `validFrom`/`validTo`, as-of is MDI-backed (verified via `explain`), AAPL `operates_in` as-of 48/76/85 (2014/18/24) ([build_temporal.sh](../scripts/build_temporal.sh), [validate_temporal.py](../scripts/validate_temporal.py)) |
 
 ### Non-goals (this phase)
 
@@ -494,7 +505,11 @@ not the blueprint's churn-aging demo (whose TTL physically deletes history).
 **Validation (fixes the blueprint's gap — it checks document shape only):** occurrence-count
 reconciliation; every as-of result ⊆ the loaded edges; spot-checks on known facts (e.g.
 `aapl` `operates_in` `china` present as-of 2018, absent in a pre-entry year); `explain`
-confirms MDI / composite-index usage. Build sequence: **M8** (§7).
+confirms MDI / composite-index usage. **Status: built & validated (M8, v0.15).** A
+data-quality clamp folds OCR-noisy start years (absurd values like 1163/8176 that parse
+cleanly) back to the filing year when outside [2013, 2026] — otherwise ~654 K edges (43 K
+open-ended) would pollute every snapshot; `endDate` is left lenient so real far-future
+maturities read as open-ended. Build: `scripts/build_temporal.sh`.
 
 ## 5. Sizing (from data analysis)
 
@@ -546,7 +561,7 @@ Note: latency on the shared remote cluster is noisy (a single query has ranged
 | M5 | NL-query evaluation (Cypher→AQL / NL→Cypher via `arango-cypher-py` + GraphRAG) | G6, §4.6 | **Done (FinReflectKG-side)** — schema-aware **NL→Cypher front-end** run ([scripts/nl2cypher_eval.py](../scripts/nl2cypher_eval.py)): **19/22 transpile · 9/22 execute · 0 `MAPPING_NOT_FOUND`** (vs 14/22 · 7/22 for hand-written Cypher, [scripts/cypher_eval.py](../scripts/cypher_eval.py)). **GraphRAG answer synthesis 5/5** ([scripts/graphrag_rubric.py](../scripts/graphrag_rubric.py)). Root-caused the gold-set vocabulary mismatch against live data (sibling-schema rename `:RISK`→`RISK_FACTOR`; `ORG_REG` real but capped out of the top-20 ontology; `:METADATA` absent). Remaining upstream: transpiler ERR 1511 (multi-`WITH`), non-VCI AQL efficiency, analyzer entity cap, `reduce()` ([nl-graphrag.md](nl-graphrag.md)) |
 | M6 | Multi-distribution builds (OneShard + SmartGraph) | G7 | **Done** — OneShard and SmartGraph both built & verified ([multi-distribution-plan.md](multi-distribution-plan.md)) |
 | M7 | Graph analytics via GAE (deterministic jobs + agentic NL→insights) | G8, §4.7 | **Partial** — base verified (PageRank + WCC on 3.1 M nodes, [scripts/analytics.py](../scripts/analytics.py)); agentic planning completes (NL → 10 use cases, [scripts/analytics_agentic.py](../scripts/analytics_agentic.py)); autonomous execute→report loop optional/pending |
-| M8 | Time-travel layer (`FinReflectKgTemporal`, OneShard) | G9, §4.8 | **Planned** — P0 `explain` spike done (MDI engages on direct-edge as-of; not in traversals). Build: ETL `validFrom`/`validTo` (`YYYYMM`) → MDI + composite VCIs → as-of / current / diff query suite → validation |
+| M8 | Time-travel layer (`FinReflectKgTemporal`, OneShard) | G9, §4.8 | **Done** — built via [scripts/build_temporal.sh](../scripts/build_temporal.sh) (augment → OneShard import → MDI + composite VCIs → graph → validate); 17,513,372 edges, validation green. Includes a data-quality clamp on OCR-noisy start years (§4.8) |
 
 ## 8. Risks & open questions
 

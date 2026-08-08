@@ -9,6 +9,11 @@ import time
 from arango import ENV, req
 
 DB = ENV.get("ARANGO_DB", "FinReflectKG")
+# ARANGO_TEMPORAL=1 -> also build the time-travel indexes (§4.8): an MDI over
+# [validFrom, validTo] for unbounded as-of scans, plus node-anchored composite
+# VCIs that extend the two VCIs above with a trailing `validFrom` (the access
+# path the optimizer picks for node-anchored as-of — verified by the P0 spike).
+TEMPORAL = ENV.get("ARANGO_TEMPORAL")
 
 # (collection, fields, name) — all persistent indexes.
 INDEXES = [
@@ -31,15 +36,7 @@ INDEXES = [
 ]
 
 
-def create(collection, fields, name):
-    body = {
-        "type": "persistent",
-        "fields": fields,
-        "name": name,
-        "unique": False,
-        "sparse": False,
-        "inBackground": False,  # exclusive build; POC DB has no live traffic
-    }
+def _create(collection, body, name):
     t0 = time.time()
     status, resp = req(
         "POST", f"/_api/index?collection={collection}", body, db=DB, timeout=3600
@@ -47,12 +44,33 @@ def create(collection, fields, name):
     dt = time.time() - t0
     if status in (200, 201):
         state = "created" if resp.get("isNewlyCreated") else "exists"
-        print(f"{collection}.{name} {fields}: {state} ({dt:.1f}s)")
+        print(f"{collection}.{name} [{body['type']}] {body['fields']}: {state} ({dt:.1f}s)")
     else:
         raise SystemExit(f"index {name} failed: {status} {resp}")
+
+
+def create(collection, fields, name):
+    _create(collection, {
+        "type": "persistent", "fields": fields, "name": name,
+        "unique": False, "sparse": False,
+        "inBackground": False,  # exclusive build; POC DB has no live traffic
+    }, name)
+
+
+def create_mdi(collection, fields, name):
+    # Multi-dimensional index over numeric temporal fields; requires numeric
+    # (double) values in every doc. Accelerates direct as-of scans (§4.8).
+    _create(collection, {
+        "type": "mdi", "fields": fields, "fieldValueTypes": "double",
+        "name": name, "unique": False, "sparse": False, "inBackground": False,
+    }, name)
 
 
 if __name__ == "__main__":
     for c, f, n in INDEXES:
         create(c, f, n)
+    if TEMPORAL:
+        create_mdi("relations", ["validFrom", "validTo"], "idx_relations_mdi_temporal")
+        create("relations", ["_from", "type", "validFrom"], "vci_from_type_validfrom")
+        create("relations", ["_to", "type", "validFrom"], "vci_to_type_validfrom")
     print("indexing complete")
