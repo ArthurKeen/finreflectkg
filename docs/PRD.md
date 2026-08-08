@@ -11,6 +11,18 @@
 
 ## 0. Changelog
 
+- **v0.14 (2026-08-07):** **Time-travel layer scoped + P0-verified (G9/§4.8, M8).**
+  10 fiscal years of 10-Ks ⇒ point-in-time reconstruction. Design: numeric valid-time
+  `validFrom`/`validTo` (`YYYYMM` ints, `NEVER_EXPIRES=999912`) **directly on `relations`**
+  (a derived `fact_relations` overlay was proposed and **dropped as unnecessary**) + an
+  **MDI** index; adapts the `network-asset-management-demo` "TTL" blueprint to this
+  read-only LPG. **`explain` spike on the live 3.12 cluster:** a direct-edge as-of
+  (`validFrom <= t AND validTo > t`) **uses the MDI** (filter fully index-covered); a
+  node-anchored typed as-of uses a **persistent composite index** `(_from, type, validFrom)`,
+  not the MDI; a `p.edges[*] ALL` **traversal does NOT engage the MDI** (edge-index +
+  per-edge post-filter — same as the VCIs, §4.2). ⇒ as-of is expressed as **direct edge
+  queries**; multi-hop temporal uses `PRUNE`+filter. Target DB **`FinReflectKgTemporal`
+  (OneShard)**. Details: §4.8.
 - **v0.13 (2026-07-30):** **Agentic planning pipeline completes end-to-end (G8 top
   layer).** Fixed two upstream bugs in `agentic-graph-analytics` (`graph_analytics_ai`):
   (1) `state.py`/report `json.dump` lacked `default=str` (enum not serializable), and
@@ -170,6 +182,7 @@ This is a POC to load that dataset into a managed ArangoDB deployment and evalua
 | G6 | NL-query readiness | Source-text chunks joinable from every edge; **Cypher→AQL / NL→Cypher via `arango-cypher-py`** (§4.6) + GraphRAG grounding | **Done (FinReflectKG-side)** — NL→Cypher **front-end** run ([scripts/nl2cypher_eval.py](../scripts/nl2cypher_eval.py)): **19/22 transpile, 9/22 execute, 0 `MAPPING_NOT_FOUND`** (vocabulary gap closed); hand-written Cypher path 14/22 · 7/22 ([scripts/cypher_eval.py](../scripts/cypher_eval.py)); GraphRAG grounding 24/24 + **answer synthesis 5/5** ([scripts/graphrag.py](../scripts/graphrag.py), [scripts/graphrag_rubric.py](../scripts/graphrag_rubric.py)); gold-set AQL runner 21/22. Remaining ceiling is upstream (transpiler bugs, non-VCI AQL efficiency, analyzer cap) — see [nl-graphrag.md](nl-graphrag.md) |
 | G7 | Multiple distributions for comparative scale benchmarking | Same dataset built as a **OneShard** db (`FinReflectKgOneShard`) and a **sharded SmartGraph** db (`FinReflectKgSmart`) alongside the baseline `FinReflectKG`; sharding verified (see §4.5) | **Done** — OneShard and SmartGraph both built & verified ([multi-distribution-plan.md](multi-distribution-plan.md)) |
 | G8 | Graph analytics over the graph (GAE): centrality/PageRank, connected components (WCC/SCC), community detection — deterministic jobs + an agentic NL→insights layer | Reproducible GAE jobs on `Node`/`relations` with recorded results (non-mutating result collections), plus an NL/requirements→insights flow (see §4.7) | **Partial** — deterministic base **verified** ([scripts/analytics.py](../scripts/analytics.py)): PageRank + WCC end-to-end on all 3.1 M nodes (self-managed ACP GAE); agentic **planning** layer **completes** ([scripts/analytics_agentic.py](../scripts/analytics_agentic.py)): NL requirements → 10 GAE use cases. Remaining (optional): the fully-autonomous NL→execute→report loop |
+| G9 | **Time-travel (temporal) queries** — point-in-time as-of, current-state, and year-over-year diff over the 10 fiscal years | Numeric `validFrom`/`validTo` on `relations` + an MDI temporal index; as-of / current / diff queries return correct rows and are index-backed (MDI for unbounded, persistent composite for node-anchored — verified §4.8); built in `FinReflectKgTemporal` | **Planned** — design + P0 `explain` spike done (§4.8); build is M8 |
 
 ### Non-goals (this phase)
 
@@ -428,6 +441,61 @@ plan's algorithms feed into (all 5 selected algorithms are supported by `analyti
 `graph_analytics_ai/ai/agents/` mode, or glue that feeds the agentic plan into
 `analytics.py`), and running the base across the OneShard/Smart distributions.
 
+### 4.8 Time-travel (temporal) layer — G9
+
+The corpus is 10 fiscal years (2014–2024) of 10-K observations, so the graph supports
+point-in-time reconstruction. We adopt the valid-time interval model from the
+`network-asset-management-demo` "TTL" blueprint (numeric validity fields + an MDI index
++ an as-of filter), **adapted to this LPG and read-only archive**:
+
+- **No overlay collection.** Temporal validity lives **directly on the existing
+  `relations` occurrence edges** — not on a derived `fact_relations` collection (an
+  earlier proposal, dropped as unnecessary: at any instant a fact's per-filing fiscal
+  spans are disjoint across years, so a plain as-of filter already returns the facts
+  valid then; deduplication for diffs is a cheap in-query `COLLECT`).
+- **Fields (numeric, for MDI `double`):** `validFrom`, `validTo` as **`YYYYMM`
+  integers** (e.g. `201806`), derived in the DuckDB preprocess from `startDate` /
+  `endDate`. `validTo` is **exclusive** (first month after the period end): a
+  fiscal-year edge `2018-01…2018-12` stores `validFrom=201801, validTo=201901`.
+  Open-ended / `default_end_timestamp` rows use the sentinel **`NEVER_EXPIRES = 999912`**.
+  Nodes stay atemporal; a node's presence at `t` is derived from having any `relations`
+  edge valid at `t`.
+- **Query forms:** as-of `FILTER e.validFrom <= @t AND e.validTo > @t` (half-open);
+  current/latest `FILTER e.validTo == @never_expires`; diff `t1→t2` = two as-of
+  `COLLECT`s of `(ticker,_from,type,_to)` + `MINUS` → appeared / disappeared facts.
+
+**Indexing — verified by the P0 `explain` spike (2026-08-07, live 3.12 cluster):**
+- **MDI** `mdi` on `relations[validFrom, validTo]` (`fieldValueTypes:"double"`): a
+  direct, non-node-anchored as-of scan **uses it**, temporal filter fully index-covered
+  (`remove-filter-covered-by-index`).
+- **Node-anchored** typed as-of (`_from == @n AND type == @r AND validFrom <= @t …`) is
+  served by a **persistent composite index** `relations(_from, type, validFrom)` (+ the
+  reverse `(_to, type, validFrom)`) — the optimizer picks it over the MDI
+  (`move-filters-into-enumerate`), `validTo` a cheap residual in the narrow typed slice.
+  These extend the §4.2 VCIs with a trailing `validFrom`.
+- **Traversals do NOT engage the MDI** — a `p.edges[*] ALL <= @t` traversal uses only the
+  built-in `edge` index and applies the temporal predicate as a per-edge post-filter
+  (`optimize-traversals`), **exactly as the VCIs behave in traversals (§4.2, §8)**.
+  Therefore as-of is expressed as **direct edge-collection queries**; multi-hop temporal
+  uses `PRUNE (e.validFrom > @t OR e.validTo <= @t)` + per-edge `FILTER` to cut dead
+  branches early (correct, edge-index-backed, not MDI-accelerated).
+
+**Placement — `FinReflectKgTemporal`, OneShard.** A dedicated database keeps the additive
+temporal fields + MDI from perturbing the frozen M4 benchmark baselines and lets the
+encoding iterate without re-importing the large distributions. **OneShard** because the
+perf-sensitive temporal path is the multi-hop as-of traversal, which the spike shows is
+*not* index-accelerated — co-locating all edges on one DBServer removes cross-DBServer
+`RemoteNode` hops (M4: OneShard ~4× faster on 2-hop), and a demo needs no horizontal
+scale-out. Once the encoding is settled, `validFrom`/`validTo` fold into the shared ETL so
+**all three distributions** inherit temporal and it becomes benchmarkable across placements
+(the G7 lens). **TTL is deliberately not used** — this is a permanent historical archive,
+not the blueprint's churn-aging demo (whose TTL physically deletes history).
+
+**Validation (fixes the blueprint's gap — it checks document shape only):** occurrence-count
+reconciliation; every as-of result ⊆ the loaded edges; spot-checks on known facts (e.g.
+`aapl` `operates_in` `china` present as-of 2018, absent in a pre-entry year); `explain`
+confirms MDI / composite-index usage. Build sequence: **M8** (§7).
+
 ## 5. Sizing (from data analysis)
 
 See [data-analysis.md](data-analysis.md) for measured numbers, [load-report.md](load-report.md)
@@ -478,6 +546,7 @@ Note: latency on the shared remote cluster is noisy (a single query has ranged
 | M5 | NL-query evaluation (Cypher→AQL / NL→Cypher via `arango-cypher-py` + GraphRAG) | G6, §4.6 | **Done (FinReflectKG-side)** — schema-aware **NL→Cypher front-end** run ([scripts/nl2cypher_eval.py](../scripts/nl2cypher_eval.py)): **19/22 transpile · 9/22 execute · 0 `MAPPING_NOT_FOUND`** (vs 14/22 · 7/22 for hand-written Cypher, [scripts/cypher_eval.py](../scripts/cypher_eval.py)). **GraphRAG answer synthesis 5/5** ([scripts/graphrag_rubric.py](../scripts/graphrag_rubric.py)). Root-caused the gold-set vocabulary mismatch against live data (sibling-schema rename `:RISK`→`RISK_FACTOR`; `ORG_REG` real but capped out of the top-20 ontology; `:METADATA` absent). Remaining upstream: transpiler ERR 1511 (multi-`WITH`), non-VCI AQL efficiency, analyzer entity cap, `reduce()` ([nl-graphrag.md](nl-graphrag.md)) |
 | M6 | Multi-distribution builds (OneShard + SmartGraph) | G7 | **Done** — OneShard and SmartGraph both built & verified ([multi-distribution-plan.md](multi-distribution-plan.md)) |
 | M7 | Graph analytics via GAE (deterministic jobs + agentic NL→insights) | G8, §4.7 | **Partial** — base verified (PageRank + WCC on 3.1 M nodes, [scripts/analytics.py](../scripts/analytics.py)); agentic planning completes (NL → 10 use cases, [scripts/analytics_agentic.py](../scripts/analytics_agentic.py)); autonomous execute→report loop optional/pending |
+| M8 | Time-travel layer (`FinReflectKgTemporal`, OneShard) | G9, §4.8 | **Planned** — P0 `explain` spike done (MDI engages on direct-edge as-of; not in traversals). Build: ETL `validFrom`/`validTo` (`YYYYMM`) → MDI + composite VCIs → as-of / current / diff query suite → validation |
 
 ## 8. Risks & open questions
 
@@ -491,4 +560,6 @@ Note: latency on the shared remote cluster is noisy (a single query has ranged
 | One edge per occurrence (17.51 M) vs deduplicated facts (8.49 M distinct e/r/t, measured) | Keep per-occurrence edges (provenance + temporal value is the dataset's point); a deduplicated "fact" layer can be derived later if benchmarks need it |
 | Remote import throughput (TLS, WAN) | Batch + parallel `arangoimport`; measure on a 1-shard pilot before full run |
 | `start_date`/`end_date` are strings (`"January 2014"`, `default_end_timestamp`) | Parse to ISO `yyyy-mm` during preprocessing; keep raw value in a sibling field |
+| Time-travel traversals (`p.edges[*] ALL`) do **not** engage the MDI on 3.12.x (edge-index + post-filter — verified P0 spike) | Express as-of as **direct edge queries** (MDI / composite-index backed); use `PRUNE` for multi-hop temporal — same access-path discipline as the VCIs (§4.2/§4.8) |
+| Temporal encoding: reporting-period dates are month-granular, ~4% open-ended, occasionally noisy/multi-year | `validFrom`/`validTo` as `YYYYMM` ints (exclusive `validTo`); `default_*`/open → `NEVER_EXPIRES=999912`; validate as-of results against known facts, not raw dates (§4.8) |
 | Dataset license is NC | POC/research use only; revisit before productization |
