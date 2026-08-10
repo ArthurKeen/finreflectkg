@@ -38,6 +38,11 @@ from arango import ENV, req
 
 DB = ENV.get("ARANGO_DB", "FinReflectKG")
 THEME_NAME = "FinReflectKG"
+# ARANGO_TEMPORAL=1 -> also install the time-travel demo assets (§4.8): as-of / diff /
+# currently-valid saved queries + a "current vs historical" edge theme. Set by the
+# FinReflectKgTemporal build; the non-temporal distributions leave it unset (skipped).
+TEMPORAL = ENV.get("ARANGO_TEMPORAL")
+NEVER_EXPIRES = 999912   # open-ended sentinel, mirrors scripts/augment_temporal.py
 
 
 def _detect_graph():
@@ -421,6 +426,48 @@ def build_theme():
     }, len(node_rules), len(edge_rules)
 
 
+def _currency_edge_rule():
+    """Temporal 'currency' edge rule: colour still-current facts
+    (validTo == NEVER_EXPIRES) distinctly; historical edges fall back to the muted
+    base line colour. Keyed on the numeric validTo (equality op is a single '=')."""
+    return {
+        "id": rule_uuid("edge", "currency_current"),
+        "attributePath": "validTo",
+        "attributeType": "number",
+        "conditionType": "singleValue",
+        "condition": {
+            "op": "=",
+            "right": {"type": "literal", "value": NEVER_EXPIRES},
+            "config": {
+                "lineStyle": {"color": "#2f855a", "thickness": 1.8},  # current = bold green
+                "labelAttribute": "type",
+                "hoverInfoAttributes": ["type", "validFrom", "validTo", "ticker"],
+                "rules": [],
+            },
+            "enabledFields": {"color": True, "icon": False,
+                              "labelAttribute": False, "hoverInfoAttributes": False},
+        },
+    }
+
+
+def build_currency_theme(base_theme):
+    """Second, non-default theme for the time-travel DB: nodes keep their type
+    styling (reused from the type theme); edges are coloured by currency — bold
+    green if still valid, muted grey if historical."""
+    return {
+        "name": "FinReflectKG-currency", "graphId": GRAPH, "isDefault": False,
+        "nodeConfigMap": base_theme["nodeConfigMap"],
+        "edgeConfigMap": {"relations": {
+            "lineStyle": {"color": EDGE_BASE_COLOR, "thickness": 1.0},   # historical = grey
+            "labelAttribute": "type",
+            "arrowStyle": {"sourceArrowShape": "none", "targetArrowShape": "triangle"},
+            "labelStyle": {"color": "#1d2531"},
+            "hoverInfoAttributes": ["type", "validFrom", "validTo", "ticker"],
+            "rules": [_currency_edge_rule()],
+        }},
+    }
+
+
 def install_theme():
     ensure_collection("_graphThemeStore")
     theme, n_node, n_edge = build_theme()
@@ -457,6 +504,13 @@ def install_theme():
                               "arrowStyle": {"sourceArrowShape": "none", "targetArrowShape": "triangle"},
                               "labelStyle": {"color": "#1d2531"}, "hoverInfoAttributes": [], "rules": []}},
         })
+
+    # Temporal 'currency' theme (non-default) — only on the time-travel DB. Installed
+    # before the enforcement loop below so it is included in the one-default check.
+    if TEMPORAL:
+        curr_key = slug(f"{GRAPH}_currency")
+        upsert_doc("_graphThemeStore", curr_key, build_currency_theme(theme))
+        print(f"temporal currency theme installed (non-default): {curr_key}")
 
     # Enforce exactly one isDefault:true for this graph (Visualizer corrupts with
     # zero or multiple). The intended default is the type theme, or the plain
@@ -562,13 +616,56 @@ FOR e IN relations
     },
 ]
 
+# Time-travel saved queries (§4.8) — installed only when ARANGO_TEMPORAL=1 (the
+# FinReflectKgTemporal DB), keyed on the numeric validFrom/validTo fields. Half-open
+# as-of predicate `validFrom <= asof AND validTo > asof`; asof is a YYYYMM literal.
+TEMPORAL_SAVED_QUERIES = [
+    {
+        "key": "tt_asof_company",
+        "name": "Time-travel — as-of: a company's facts at a given month (edit ticker/asof)",
+        "aql": """// AS-OF snapshot: one company's facts valid at @asof (YYYYMM). Edit ticker / asof.
+LET ticker = "aapl"
+LET asof = 201806
+FOR e IN relations
+  FILTER e.ticker == ticker AND e.validFrom <= asof AND e.validTo > asof
+  LIMIT 300
+  RETURN e""",
+    },
+    {
+        "key": "tt_current_company",
+        "name": "Time-travel — currently-valid (open-ended) facts for a company (edit ticker)",
+        "aql": """// Facts still valid as of the latest filing (validTo == NEVER_EXPIRES). Edit ticker.
+LET ticker = "aapl"
+FOR e IN relations
+  FILTER e.ticker == ticker AND e.validTo == 999912
+  LIMIT 300
+  RETURN e""",
+    },
+    {
+        "key": "tt_diff_company",
+        "name": "Time-travel — diff: facts that appeared between two months (edit ticker/a/b)",
+        "aql": """// Facts valid as-of @b but NOT as-of @a (appeared). Edit ticker / a / b (YYYYMM).
+LET ticker = "aapl"
+LET a = 201406
+LET b = 202406
+LET aset = (FOR x IN relations FILTER x.ticker == ticker AND x.validFrom <= a AND x.validTo > a
+              RETURN CONCAT(x._from, "|", x.type, "|", x._to))
+FOR e IN relations
+  FILTER e.ticker == ticker AND e.validFrom <= b AND e.validTo > b
+    AND CONCAT(e._from, "|", e.type, "|", e._to) NOT IN aset
+  LIMIT 300
+  RETURN e""",
+    },
+]
+
 
 def install_saved_queries(vp_id):
     ensure_collection("_queries")
     ensure_collection("_viewpointQueries", edge=True)
     ensure_collection("_editor_saved_queries")
     query_keys, editor_keys = set(), set()
-    for q in SAVED_QUERIES:
+    queries = SAVED_QUERIES + (TEMPORAL_SAVED_QUERIES if TEMPORAL else [])
+    for q in queries:
         qkey = slug(f"{GRAPH}_{q['key']}")
         query_keys.add(qkey)
         qid = upsert_doc("_queries", qkey, {
@@ -588,7 +685,8 @@ def install_saved_queries(vp_id):
     # circular-dependencies query) so re-runs don't leave stale docs behind.
     reconcile_namespace("_queries", query_keys, edge_coll="_viewpointQueries")
     reconcile_editor_queries(editor_keys)
-    print(f"saved queries: {len(SAVED_QUERIES)} in _queries + _editor_saved_queries")
+    print(f"saved queries: {len(queries)} in _queries + _editor_saved_queries"
+          f"{' (incl. 3 time-travel)' if TEMPORAL else ''}")
 
 
 # --------------------------------------------------------------------------- #
