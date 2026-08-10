@@ -656,6 +656,33 @@ FOR e IN relations
   LIMIT 300
   RETURN e""",
     },
+    {
+        "key": "tt_backward_looking",
+        "name": "Time-travel — backward-looking assertions for a company (edit ticker/lag)",
+        "aql": """// Facts a company's filings assert about periods >= @lag years earlier (backward-looking /
+// historical references; formal restatements are a subset). Edit ticker / lag (years).
+LET ticker = "etr"
+LET lag = 3
+FOR e IN relations
+  FILTER e.ticker == ticker AND e.startDate != null
+    AND (e.year - TO_NUMBER(SUBSTRING(e.startDate, 0, 4))) >= lag
+  LIMIT 300
+  RETURN e""",
+    },
+    {
+        "key": "tt_bitemporal_known_from",
+        "name": "Time-travel — facts about a period first known from later filings (edit ticker/period/knownFrom)",
+        "aql": """// BITEMPORAL: facts about fiscal @period (YYYY) that a company reported only in filing
+// year >= @knownFrom — i.e. knowledge that arrived later. Edit ticker / period / knownFrom.
+LET ticker = "amzn"
+LET period = "2020"
+LET knownFrom = 2022
+FOR e IN relations
+  FILTER e.ticker == ticker AND e.startDate != null
+    AND SUBSTRING(e.startDate, 0, 4) == period AND e.year >= knownFrom
+  LIMIT 300
+  RETURN e""",
+    },
 ]
 
 
@@ -686,7 +713,7 @@ def install_saved_queries(vp_id):
     reconcile_namespace("_queries", query_keys, edge_coll="_viewpointQueries")
     reconcile_editor_queries(editor_keys)
     print(f"saved queries: {len(queries)} in _queries + _editor_saved_queries"
-          f"{' (incl. 3 time-travel)' if TEMPORAL else ''}")
+          f"{f' (incl. {len(TEMPORAL_SAVED_QUERIES)} time-travel)' if TEMPORAL else ''}")
 
 
 # --------------------------------------------------------------------------- #
