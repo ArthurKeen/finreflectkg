@@ -1,6 +1,6 @@
 # PRD — FinReflectKG on ArangoDB (Proof of Concept)
 
-**Status:** Draft v0.13 · 2026-07-30 (graph analytics: GAE base verified — PageRank + WCC on 3.1 M nodes; agentic **planning** pipeline now completes end-to-end — 10 GAE use cases from NL requirements, after fixing 2 upstream bugs in `agentic-graph-analytics` — G8/§4.7)
+**Status:** Draft v0.16 · 2026-08-10 (time-travel layer live on `FinReflectKgTemporal` — 17.5 M temporal edges, MDI-backed as-of; **bitemporal (P3)** + **temporal analytics (P4)** added — G9/§4.8)
 **Authors:** Arthur Keen (ArangoDB)
 **Related docs:** [data-analysis.md](data-analysis.md) · [etl-plan.md](etl-plan.md) ·
 [load-report.md](load-report.md) · [sharding-analysis.md](sharding-analysis.md) ·
@@ -11,6 +11,11 @@
 
 ## 0. Changelog
 
+- **v0.16 (2026-08-10):** **Bitemporal + temporal analytics on the time-travel layer (G9/§4.8 — P3, P4).**
+  P3: filing `year` as transaction-time vs `validFrom`/`validTo` valid-time → a backward-looking
+  restatement report (1.82 M edges, 10.5 %) + "as-known-as-of" ([scripts/restatements.py](../scripts/restatements.py)).
+  P4: per-as-of-year centrality + topic-shift trend analytics ([scripts/temporal_analytics.py](../scripts/temporal_analytics.py))
+  and GAE PageRank-per-year ([scripts/temporal_pagerank.py](../scripts/temporal_pagerank.py)).
 - **v0.15 (2026-08-08):** **Time-travel layer built + validated (G9/§4.8 — Done, M8).**
   Built `FinReflectKgTemporal` (OneShard) via [scripts/build_temporal.sh](../scripts/build_temporal.sh):
   augmented all **17,513,372** relations edges with numeric `validFrom`/`validTo`, created the MDI +
@@ -510,6 +515,21 @@ data-quality clamp folds OCR-noisy start years (absurd values like 1163/8176 tha
 cleanly) back to the filing year when outside [2013, 2026] — otherwise ~654 K edges (43 K
 open-ended) would pollute every snapshot; `endDate` is left lenient so real far-future
 maturities read as open-ended. Build: `scripts/build_temporal.sh`.
+
+**Bitemporal analysis — G9-P3.** Filing `year` is the **transaction-time** axis (when a fact
+was asserted) and `validFrom`/`validTo` the **valid-time** axis (when it held) — the graph is
+bitemporal with no new fields. [scripts/restatements.py](../scripts/restatements.py) reports
+**backward-looking assertions** (filing year − period start ≥ lag): **1.82 M edges (10.5 %)** are
+backward-looking, led by utilities/insurers, enabling an "as-known-as-of" query. Two visualizer
+saved queries (backward-looking + bitemporal known-from) are installed, gated by `ARANGO_TEMPORAL`.
+
+**Temporal analytics — G9-P4.** Trend analysis across the decade of as-of snapshots.
+[scripts/temporal_analytics.py](../scripts/temporal_analytics.py) computes per-as-of-year
+centrality (in-degree), target-type topic shift, and biggest risers (covid-19 enters the 2020
+top-10; cybersecurity risk / lease accounting / SEC rule rise 2014→2024). Since Pregel is
+deprecated on this cluster, [scripts/temporal_pagerank.py](../scripts/temporal_pagerank.py)
+computes per-year influence with **GAE PageRank** over materialized as-of snapshot edge
+collections, compared across years.
 
 ## 5. Sizing (from data analysis)
 
