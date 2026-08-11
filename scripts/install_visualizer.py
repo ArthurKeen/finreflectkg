@@ -568,16 +568,22 @@ FOR apple IN Node
     },
     {
         "key": "risk_propagation_3hop",
-        "name": "Risk → org → org → location (3-hop propagation)",
+        "name": "Risk → company → location (2-hop propagation)",
+        # Was a 3-hop risk→org→org→location motif, but risk→ORG is sparse and the
+        # org→org→location `depends_on` chain barely exists (the traversal times
+        # out and returns nothing). This 2-hop shape — a risk/event, through a
+        # company it impacts, out to the geographies that company operates in —
+        # matches the data and returns fast. The premature `LIMIT 50` on risks
+        # (applied before the path filter) is also gone. Key kept ("_3hop") so a
+        # re-install upgrades the existing saved query in place, no orphan.
         "aql": """WITH Node
 FOR risk IN Node
-  FILTER risk.type IN ["RISK", "RISK_FACTOR", "EVENT"]
-  LIMIT 50
-  FOR loc, e, p IN 3..3 OUTBOUND risk relations OPTIONS {bfs: true, uniqueVertices: "path"}
-    FILTER p.edges[0].type == "negatively_impacts" AND p.vertices[1].type == "ORG"
-    FILTER p.edges[1].type == "depends_on" AND p.vertices[2].type == "ORG"
-    FILTER p.edges[2].type == "operates_in" AND loc.type == "GPE"
-    LIMIT 20
+  FILTER risk.type IN ["RISK_FACTOR", "RISK", "EVENT"]
+  LIMIT 2000
+  FOR loc, e, p IN 2..2 OUTBOUND risk relations OPTIONS {bfs: true, uniqueVertices: "path"}
+    FILTER p.vertices[1].type == "ORG"
+      AND p.edges[1].type == "operates_in" AND loc.type == "GPE"
+    LIMIT 25
     RETURN p""",
     },
     {
