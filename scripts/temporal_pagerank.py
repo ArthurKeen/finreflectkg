@@ -39,9 +39,16 @@ def _db():
                      password=os.environ.get("ARANGO_PASSWORD", ""), verify=True)
 
 
+def _flagged_count(db):
+    return next(db.aql.execute("RETURN LENGTH(FOR n IN Node FILTER n.isGenericMention==true RETURN 1)"))
+
+
 def ensure_snapshot(db, year):
-    """Materialize tt_snap_<year> = edges valid as-of mid-year (idempotent; batched by
-    ticker to avoid one huge write transaction)."""
+    """Materialize tt_snap_<year> = edges valid as-of mid-year, REWIRING any flagged
+    generic-mention endpoint to its per-company blank node (bnodes/bn_<ticker>_<role>) so the
+    CLEANED topology feeds GAE (docs/generic-mention-conflation.md, Phase 2). We never copy the
+    17.5M relations collection — the rewrite happens here on the per-year subset. Idempotent:
+    re-materializes if the snapshot is stale OR not yet rewired."""
     t = year * 100 + 6
     name = f"tt_snap_{year}"
     want = next(db.aql.execute(
@@ -50,8 +57,11 @@ def ensure_snapshot(db, year):
     if not db.has_collection(name):
         db.create_collection(name, edge=True)
     coll = db.collection(name)
-    if coll.count() == want:
-        print(f"  {name}: up-to-date ({want:,} edges)", flush=True)
+    rewired = coll.count() and next(db.aql.execute(
+        f"RETURN LENGTH(FOR e IN {name} FILTER STARTS_WITH(e._to,'bnodes/') "
+        f"OR STARTS_WITH(e._from,'bnodes/') LIMIT 1 RETURN 1)"))
+    if coll.count() == want and rewired:
+        print(f"  {name}: up-to-date & rewired ({want:,} edges)", flush=True)
         return name
     if coll.count():
         coll.truncate()
@@ -61,9 +71,13 @@ def ensure_snapshot(db, year):
     for tk in tickers:
         db.aql.execute(
             "FOR e IN relations FILTER e.ticker==@tk AND e.validFrom<=@t AND e.validTo>@t "
-            "INSERT {_key:e._key, _from:e._from, _to:e._to} INTO @@snap OPTIONS {ignoreErrors:true}",
+            "  LET df = DOCUMENT(e._from)  LET dt = DOCUMENT(e._to) "
+            "  LET nf = df.isGenericMention == true ? CONCAT('bnodes/bn_', e.ticker, '_', df.roleLemma) : e._from "
+            "  LET nt = dt.isGenericMention == true ? CONCAT('bnodes/bn_', e.ticker, '_', dt.roleLemma) : e._to "
+            "  INSERT {_key:e._key, _from:nf, _to:nt} INTO @@snap OPTIONS {ignoreErrors:true}",
             bind_vars={"tk": tk, "t": t, "@snap": name})
-    print(f"  {name}: materialized {coll.count():,} edges (target {want:,}, {len(tickers)} tickers)", flush=True)
+    print(f"  {name}: materialized {coll.count():,} edges, flagged endpoints rewired to bnodes "
+          f"(target {want:,}, {len(tickers)} tickers)", flush=True)
     return name
 
 
@@ -79,7 +93,7 @@ def run_pagerank(db, year, snap):
     config = AnalysisConfig(
         name=f"finreflectkg_temporal_{year}",
         description=f"pagerank as-of {year} over Node/{snap}",
-        vertex_collections=["Node"], edge_collections=[snap],
+        vertex_collections=["Node", "bnodes"], edge_collections=[snap],
         database=DB_NAME, algorithm="pagerank", algorithm_params={},
         target_collection=target, auto_cleanup=True, timeout_seconds=3600,
     )
@@ -98,6 +112,7 @@ def top_scores(db, target, field, top=TOP):
 def main():
     _load_env()
     db = _db()
+    print(f"(cleaning: {_flagged_count(db)} flagged generic-mention hubs -> per-company bnodes at snapshot time)", flush=True)
     results = {}
     for y in YEARS:
         print(f"\n=== as-of {y} ===", flush=True)
