@@ -116,6 +116,11 @@ def main():
     results = {}
     for y in YEARS:
         print(f"\n=== as-of {y} ===", flush=True)
+        done = f"gae_pr_{y}"
+        if db.has_collection(done) and db.collection(done).count() > 0:
+            print(f"  {done} already computed ({db.collection(done).count():,} ranks) — reusing", flush=True)
+            results[y] = top_scores(db, done, "rank")
+            continue
         snap = ensure_snapshot(db, y)
         target, field, status, err = run_pagerank(db, y, snap)
         print(f"  GAE pagerank status={status} -> {target}.{field}"
