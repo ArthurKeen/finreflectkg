@@ -52,7 +52,9 @@ def ensure_snapshot(db, year):
     t = year * 100 + 6
     name = f"tt_snap_{year}"
     want = next(db.aql.execute(
-        "RETURN LENGTH(FOR e IN relations FILTER e.validFrom<=@t AND e.validTo>@t RETURN 1)",
+        "LET junk = (FOR n IN Node FILTER n.isJunkPlaceholder == true RETURN n._id) "
+        "RETURN LENGTH(FOR e IN relations FILTER e.validFrom<=@t AND e.validTo>@t "
+        "  AND e._from NOT IN junk AND e._to NOT IN junk RETURN 1)",
         bind_vars={"t": t}))
     if not db.has_collection(name):
         db.create_collection(name, edge=True)
@@ -72,6 +74,7 @@ def ensure_snapshot(db, year):
         db.aql.execute(
             "FOR e IN relations FILTER e.ticker==@tk AND e.validFrom<=@t AND e.validTo>@t "
             "  LET df = DOCUMENT(e._from)  LET dt = DOCUMENT(e._to) "
+            "  FILTER df.isJunkPlaceholder != true AND dt.isJunkPlaceholder != true "  # drop junk-placeholder edges
             "  LET nf = df.isGenericMention == true ? CONCAT('bnodes/bn_', e.ticker, '_', df.roleLemma) : e._from "
             "  LET nt = dt.isGenericMention == true ? CONCAT('bnodes/bn_', e.ticker, '_', dt.roleLemma) : e._to "
             "  INSERT {_key:e._key, _from:nf, _to:nt} INTO @@snap OPTIONS {ignoreErrors:true}",
