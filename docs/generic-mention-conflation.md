@@ -1,6 +1,6 @@
 # Data-quality issue: generic-mention conflation ("supplier" super-hubs)
 
-**Status:** Identified 2026-08-12 · **deferred** (revisit in a few days) · not yet actioned
+**Status:** Identified 2026-08-12 · **Phase 1+2 live** on `FinReflectKgTemporal` (2026-08-13) · Phase 3 (coref/ER) still open
 **Owner:** Arthur Keen
 **Severity:** high for analytics / GraphRAG / visualization correctness; **not** an ETL bug
 (the defect is upstream in the source extraction — our ETL faithfully loaded it).
@@ -157,11 +157,11 @@ coref/ER task and is squarely where **`arango-entity-resolution`** applies. Also
 
 ## Recommendation
 
-Do **Phase 1 now-ish** (detect + flag) — an hour of work that immediately de-pollutes the P4
-analytics and the visualizer and is a strong demo beat ("raw extraction has a textbook KG defect;
-we detect it via cross-company fan-in and quarantine it"). Then **Phase 2** skolemization as a
-proper derived pass. Hold the **GAE PageRank-per-year** run until after Phase 1 — the flag will
-materially change the rankings (today `supplier` would rank near the top for the wrong reason).
+**Phase 1+2 are done** on `FinReflectKgTemporal`: 89 generic-mention hubs flagged, 5,893
+per-company bnodes, junk placeholders (`default`, …) excluded rather than skolemized. GAE
+PageRank-per-year was **re-run on comparable cleaned snapshots** (2014 / 2019 / 2020 / 2024
+edge counts match the junk-excluded as-of target; `default` no longer ranks). Phase 3
+(coref/ER to named entities) remains open.
 
 Demo narrative this unlocks: *raw extraction defect → detect via cross-company fan-in → remodel as
 skolemized blank nodes → before/after in the graph and in PageRank.* That showcases real

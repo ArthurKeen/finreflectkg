@@ -1,6 +1,6 @@
 # PRD — FinReflectKG on ArangoDB (Proof of Concept)
 
-**Status:** Draft v0.16 · 2026-08-10 (time-travel layer live on `FinReflectKgTemporal` — 17.5 M temporal edges, MDI-backed as-of; **bitemporal (P3)** + **temporal analytics (P4)** added — G9/§4.8)
+**Status:** Draft v0.17 · 2026-08-13 (P4 PageRank-per-year re-run on comparable cleaned snapshots — generic-mention rewiring + junk-placeholder exclusion; resume-skip no longer ranks stale years)
 **Authors:** Arthur Keen (ArangoDB)
 **Related docs:** [data-analysis.md](data-analysis.md) · [etl-plan.md](etl-plan.md) ·
 [load-report.md](load-report.md) · [sharding-analysis.md](sharding-analysis.md) ·
@@ -11,6 +11,15 @@
 
 ## 0. Changelog
 
+- **v0.17 (2026-08-13):** **P4 PageRank-per-year on comparable cleaned snapshots.** The first
+  GAE run reused cached `gae_pr_*` collections without checking the snapshot they came from,
+  so 2019 was ranked off an 8.5%-complete snapshot (166,935 vs 1.96 M edges) and 2024 off
+  un-rewired topology — plus a junk placeholder `default` ranked #1/#2. Fix:
+  [scripts/temporal_pagerank.py](../scripts/temporal_pagerank.py) now validates the snapshot
+  *before* resume-skip, refuses partial materialization, drops junk-placeholder edges, and
+  `--rebuild`/`--recompute` force a consistent re-run. Live `FinReflectKgTemporal`: snapshots
+  match junk-excluded as-of counts (2014: 1,142,019 · 2019: 1,963,246 · 2020: 2,131,464 ·
+  2024: 2,138,110); `default` gone from the top-15; `net income` #1 in every year.
 - **v0.16 (2026-08-10):** **Bitemporal + temporal analytics on the time-travel layer (G9/§4.8 — P3, P4).**
   P3: filing `year` as transaction-time vs `validFrom`/`validTo` valid-time → a backward-looking
   restatement report (1.82 M edges, 10.5 %) + "as-known-as-of" ([scripts/restatements.py](../scripts/restatements.py)).
@@ -529,7 +538,10 @@ centrality (in-degree), target-type topic shift, and biggest risers (covid-19 en
 top-10; cybersecurity risk / lease accounting / SEC rule rise 2014→2024). Since Pregel is
 deprecated on this cluster, [scripts/temporal_pagerank.py](../scripts/temporal_pagerank.py)
 computes per-year influence with **GAE PageRank** over materialized as-of snapshot edge
-collections, compared across years.
+collections, compared across years. Snapshots rewire flagged generic-mention endpoints to
+per-company bnodes and drop junk placeholders (`isJunkPlaceholder`); resume-skip is gated
+on snapshot freshness so years stay comparable (v0.17). Live ranks: `net income` #1 in
+2014 / 2019 / 2020 / 2024.
 
 ## 5. Sizing (from data analysis)
 

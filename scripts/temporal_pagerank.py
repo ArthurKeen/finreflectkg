@@ -10,6 +10,7 @@ MUST run under .venv311 (python-arango + graph_analytics_ai), like scripts/analy
 """
 from __future__ import annotations
 
+import argparse
 import os
 import pathlib
 import sys
@@ -19,7 +20,7 @@ import sys
 _SELF = str(pathlib.Path(__file__).resolve().parent)
 sys.path[:] = [p for p in sys.path if p not in ("", ".", _SELF)]
 
-YEARS = [2014, 2019, 2024]
+YEARS = [2014, 2019, 2020, 2024]
 DB_NAME = "FinReflectKgTemporal"
 TOP = 15
 
@@ -48,7 +49,10 @@ def ensure_snapshot(db, year):
     generic-mention endpoint to its per-company blank node (bnodes/bn_<ticker>_<role>) so the
     CLEANED topology feeds GAE (docs/generic-mention-conflation.md, Phase 2). We never copy the
     17.5M relations collection — the rewrite happens here on the per-year subset. Idempotent:
-    re-materializes if the snapshot is stale OR not yet rewired."""
+    re-materializes if the snapshot is stale OR not yet rewired.
+
+    Returns (name, rebuilt). `rebuilt` is True when the snapshot was (re)materialized, which
+    invalidates any PageRank previously computed from it — see main()."""
     t = year * 100 + 6
     name = f"tt_snap_{year}"
     want = next(db.aql.execute(
@@ -64,7 +68,7 @@ def ensure_snapshot(db, year):
         f"OR STARTS_WITH(e._from,'bnodes/') LIMIT 1 RETURN 1)"))
     if coll.count() == want and rewired:
         print(f"  {name}: up-to-date & rewired ({want:,} edges)", flush=True)
-        return name
+        return name, False
     if coll.count():
         coll.truncate()
     tickers = list(db.aql.execute(
@@ -81,7 +85,12 @@ def ensure_snapshot(db, year):
             bind_vars={"tk": tk, "t": t, "@snap": name})
     print(f"  {name}: materialized {coll.count():,} edges, flagged endpoints rewired to bnodes "
           f"(target {want:,}, {len(tickers)} tickers)", flush=True)
-    return name
+    if coll.count() != want:
+        raise SystemExit(
+            f"  {name}: FAILED to materialize completely — {coll.count():,} of {want:,} edges. "
+            f"Refusing to run PageRank on a partial snapshot (this is exactly the defect that "
+            f"produced the incomparable 2019 column).")
+    return name, True
 
 
 def run_pagerank(db, year, snap):
@@ -106,13 +115,25 @@ def run_pagerank(db, year, snap):
 
 
 def top_scores(db, target, field, top=TOP):
+    # r.id is a full document id ('Node/<key>' or 'bnodes/bn_<ticker>_<role>'); only a bare
+    # key needs the Node/ prefix. Getting this wrong renders skolemized bnodes as null.
     aql = f"""FOR r IN @@c SORT r.`{field}` DESC LIMIT @top
-      LET n = DOCUMENT(STARTS_WITH(r.id, 'Node/') ? r.id : CONCAT('Node/', r.id))
-      RETURN {{score: r.`{field}`, name: n.name, type: n.type}}"""
+      LET n = DOCUMENT(CONTAINS(r.id, '/') ? r.id : CONCAT('Node/', r.id))
+      RETURN {{score: r.`{field}`, name: n.name, type: n.type,
+               collection: FIRST(SPLIT(r.id, '/'))}}"""
     return list(db.aql.execute(aql, bind_vars={"@c": target, "top": top}))
 
 
 def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--rebuild", action="store_true",
+                    help="force re-materialization of every snapshot and re-run PageRank")
+    ap.add_argument("--recompute", action="store_true",
+                    help="re-run PageRank on the EXISTING snapshots (keeps materialization). Use "
+                         "when the snapshots are known-good but the ranks may predate a snapshot "
+                         "revision — guarantees every year is scored off the same rules.")
+    args = ap.parse_args()
+
     _load_env()
     db = _db()
     print(f"(cleaning: {_flagged_count(db)} flagged generic-mention hubs -> per-company bnodes at snapshot time)", flush=True)
@@ -120,11 +141,21 @@ def main():
     for y in YEARS:
         print(f"\n=== as-of {y} ===", flush=True)
         done = f"gae_pr_{y}"
-        if db.has_collection(done) and db.collection(done).count() > 0:
-            print(f"  {done} already computed ({db.collection(done).count():,} ranks) — reusing", flush=True)
+        # The snapshot is validated FIRST. Reusing a cached PageRank without checking the
+        # collection it came from is what left 2019 ranked off a 8.5%-complete snapshot and
+        # 2024 ranked off un-rewired (dirty) topology — three incomparable columns.
+        if args.rebuild and db.has_collection(f"tt_snap_{y}"):
+            db.collection(f"tt_snap_{y}").truncate()
+        snap, rebuilt = ensure_snapshot(db, y)
+        if (not rebuilt and not args.rebuild and not args.recompute
+                and db.has_collection(done) and db.collection(done).count() > 0):
+            print(f"  {done} already computed ({db.collection(done).count():,} ranks) "
+                  f"from an up-to-date snapshot — reusing", flush=True)
             results[y] = top_scores(db, done, "rank")
             continue
-        snap = ensure_snapshot(db, y)
+        if db.has_collection(done):
+            print(f"  dropping stale {done} (snapshot changed)", flush=True)
+            db.delete_collection(done)
         target, field, status, err = run_pagerank(db, y, snap)
         print(f"  GAE pagerank status={status} -> {target}.{field}"
               + (f"  ERROR: {err}" if status == "failed" else ""), flush=True)
@@ -138,7 +169,8 @@ def main():
     for y in YEARS:
         print(f"\n  as-of {y}:")
         for r in results.get(y, []):
-            print(f"    {r['score']:.6f}  {r['name']}  ({r['type']})")
+            tag = "  [bnode]" if r.get("collection") == "bnodes" else ""
+            print(f"    {r['score']:.6f}  {r['name']}  ({r['type']}){tag}")
 
 
 if __name__ == "__main__":
