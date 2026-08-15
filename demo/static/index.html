@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FinReflectKG · Time Travel</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.2/cytoscape.min.js"></script>
+</head>
+<body>
+  <header>
+    <div class="brand">FinReflectKG <span>· Time&nbsp;Travel</span></div>
+    <label class="ctl">Company
+      <input id="ticker" list="tickers" autocomplete="off" placeholder="aapl">
+      <datalist id="tickers"></datalist>
+    </label>
+    <label class="ctl grow">As&nbsp;of <b id="yearlbl">2018</b>
+      <input id="year" type="range" min="2014" max="2024" step="1" value="2018">
+    </label>
+    <span id="meta" class="meta"></span>
+  </header>
+
+  <main>
+    <div id="cy"></div>
+    <aside>
+      <section>
+        <h2>Influence <small id="infhdr"></small></h2>
+        <ol id="influence" class="rank"></ol>
+      </section>
+      <section>
+        <h2>What changed <small id="diffhdr"></small></h2>
+        <div class="diff">
+          <div><h3 class="up">Appeared</h3><ul id="appeared"></ul></div>
+          <div><h3 class="down">Disappeared</h3><ul id="disappeared"></ul></div>
+        </div>
+      </section>
+      <section>
+        <h2>Backward-looking disclosures</h2>
+        <ul id="backward" class="bw"></ul>
+      </section>
+    </aside>
+  </main>
+  <div id="legend"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
