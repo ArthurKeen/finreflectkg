@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>FinReflectKG · Time Travel</title>
   <link rel="stylesheet" href="/style.css">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.2/cytoscape.min.js"></script>
+  <script src="/vendor/cytoscape.min.js"></script>
 </head>
 <body>
   <header>
@@ -16,6 +16,9 @@
     </label>
     <label class="ctl grow">As&nbsp;of <b id="yearlbl">2018</b>
       <input id="year" type="range" min="2014" max="2024" step="1" value="2018">
+    </label>
+    <label class="ctl toggle" title="Cleaned = junk dropped + generic hubs skolemized; Raw = as extracted">
+      <input id="clean" type="checkbox" checked> <span>Cleaned</span>
     </label>
     <span id="meta" class="meta"></span>
   </header>

@@ -10,7 +10,7 @@ const colorFor = (t) => TYPE_COLORS[t] || '#8a97ad';
 const $ = (s) => document.querySelector(s);
 const j = (u) => fetch(u).then((r) => r.json());
 
-let cy, ticker = 'aapl', year = 2018;
+let cy, ticker = 'aapl', year = 2018, clean = true;
 
 function initCy() {
   cy = cytoscape({
@@ -25,6 +25,10 @@ function initCy() {
         'background-color': '#ffffff', 'border-color': '#5b8def', 'border-width': 4,
         'font-size': '14px', 'color': '#ffffff', 'font-weight': 'bold',
         'width': 54, 'height': 54, 'z-index': 20 } },
+      { selector: 'node.bnode', style: {
+        'border-color': '#4ec98a', 'border-width': 2, 'border-style': 'dashed', 'shape': 'round-rectangle' } },
+      { selector: 'node.junk', style: {
+        'background-color': '#e46a6a', 'border-color': '#e46a6a', 'shape': 'diamond', 'opacity': 0.9 } },
       { selector: 'edge', style: {
         'width': 1, 'line-color': '#31405c', 'target-arrow-color': '#31405c',
         'target-arrow-shape': 'triangle', 'arrow-scale': 0.7, 'curve-style': 'bezier',
@@ -35,19 +39,22 @@ function initCy() {
 }
 
 async function loadGraph() {
-  const d = await j(`/api/asof?ticker=${ticker}&year=${year}&limit=150`);
+  const d = await j(`/api/asof?ticker=${ticker}&year=${year}&limit=150&clean=${clean}`);
   const deg = {};
   d.edges.forEach((e) => { deg[e.source] = (deg[e.source] || 0) + 1; deg[e.target] = (deg[e.target] || 0) + 1; });
   const els = [];
-  d.nodes.forEach((n) => els.push({
-    data: { id: n.id, label: n.label, type: n.type, color: colorFor(n.type), deg: deg[n.id] || 1 },
-    classes: n.label === ticker ? 'company' : '',
-  }));
+  d.nodes.forEach((n) => {
+    const cls = [];
+    if (n.label === ticker && !n.bnode) cls.push('company');
+    if (n.bnode) cls.push('bnode');
+    if (n.junk) cls.push('junk');
+    els.push({ data: { id: n.id, label: n.label, type: n.type, color: colorFor(n.type), deg: deg[n.id] || 1 }, classes: cls.join(' ') });
+  });
   d.edges.forEach((e, i) => els.push({ data: { id: 'e' + i, source: e.source, target: e.target, label: e.label } }));
   cy.elements().remove();
   cy.add(els);
   cy.layout({ name: 'cose', animate: false, nodeRepulsion: 9000, idealEdgeLength: 72, padding: 34 }).run();
-  $('#meta').textContent = `${d.shown} of ${d.total.toLocaleString()} facts · as of mid-${year}`;
+  $('#meta').textContent = `${d.shown} of ${d.total.toLocaleString()} facts · as of mid-${year}` + (clean ? '' : ' · RAW (uncleaned)');
 }
 
 async function loadInfluence() {
@@ -93,5 +100,6 @@ function onSlider(v) { year = +v; $('#yearlbl').textContent = year; clearTimeout
   $('#ticker').value = ticker;
   yr.addEventListener('input', (e) => onSlider(e.target.value));
   $('#ticker').addEventListener('change', (e) => { const v = e.target.value.trim().toLowerCase(); if (v) { ticker = v; refreshAll(); } });
+  $('#clean').addEventListener('change', (e) => { clean = e.target.checked; loadGraph(); });
   refreshAll();
 })();

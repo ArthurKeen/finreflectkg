@@ -25,5 +25,7 @@ build step.
 
 ## Notes
 - Read-only; uses the stdlib REST helper (`scripts/arango.py`) driven by `.env`.
-- Cytoscape.js is loaded from a CDN for v1 (vendor it locally for offline demos).
+- Cytoscape.js is **vendored** at `demo/static/vendor/cytoscape.min.js` — fully offline, no CDN.
 - The as-of canvas caps at ~150 edges for readability (the header shows *shown / total*).
+- **Cleaned/Raw toggle** (header): Cleaned drops junk placeholders + skolemizes generic hubs to
+  per-company bnodes (dashed green); Raw shows the graph as extracted (shared hubs + junk diamonds).

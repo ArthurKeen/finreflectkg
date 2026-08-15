@@ -31,6 +31,18 @@ def aql(query, bind=None, timeout=60):
     return b.get("result", [])
 
 
+_flagged_ids = None
+
+
+def flagged_ids():
+    """Cached set of flagged node _ids (generic-mention + junk placeholder), so the as-of
+    sample can surface flagged-touching edges first without per-edge DOCUMENT lookups."""
+    global _flagged_ids
+    if _flagged_ids is None:
+        _flagged_ids = aql("FOR n IN Node FILTER n.isGenericMention == true OR n.isJunkPlaceholder == true RETURN n._id")
+    return _flagged_ids
+
+
 @app.get("/api/years")
 def years():
     return {"min": YEAR_MIN, "max": YEAR_MAX, "anchors": ANCHORS}
@@ -43,25 +55,43 @@ def tickers():
 
 
 @app.get("/api/asof")
-def asof(ticker: str, year: int, limit: int = 150):
-    """A company's subgraph valid as-of mid-<year> (junk placeholders excluded)."""
+def asof(ticker: str, year: int, limit: int = 150, clean: bool = True):
+    """A company's subgraph valid as-of mid-<year>.
+
+    clean=True (default): drop junk-placeholder edges and skolemize generic-mention hubs into
+    per-company blank nodes (bnodes/bn_<ticker>_<role>). clean=False: the RAW graph as extracted
+    (shared generic hubs + junk placeholders shown) — the 'before' of the cleaning story.
+    """
     t = year * 100 + 6
     rows = aql("""
+        LET flagged = @flagged
         FOR e IN relations
           FILTER e.ticker == @tk AND e.validFrom <= @t AND e.validTo > @t
-          LET df = DOCUMENT(e._from)  LET dt = DOCUMENT(e._to)
-          FILTER df.isJunkPlaceholder != true AND dt.isJunkPlaceholder != true
+          SORT (e._to IN flagged OR e._from IN flagged) ? 0 : 1   /* surface flagged-touching edges first */
           LIMIT @lim
-          RETURN {f: e._from, fn: df.name, ft: df.type, t: e._to, tn: dt.name, tt: dt.type, rel: e.type}""",
-        {"tk": ticker, "t": t, "lim": limit})
+          LET df = DOCUMENT(e._from)  LET dt = DOCUMENT(e._to)
+          RETURN {f: e._from, fn: df.name, ft: df.type, fj: df.isJunkPlaceholder, fg: df.isGenericMention, fr: df.roleLemma,
+                  t: e._to, tn: dt.name, tt: dt.type, tj: dt.isJunkPlaceholder, tg: dt.isGenericMention, tr: dt.roleLemma,
+                  rel: e.type}""",
+        {"tk": ticker, "t": t, "lim": limit, "flagged": flagged_ids()})
     total = aql("RETURN LENGTH(FOR e IN relations FILTER e.ticker==@tk AND e.validFrom<=@t AND e.validTo>@t RETURN 1)",
                 {"tk": ticker, "t": t})[0]
+
+    def endpoint(idv, name, typ, junk, gen, role):  # -> (id, label, type, is_bnode, is_junk)
+        if clean and gen and role:
+            return f"bnodes/bn_{ticker}_{role}", role, role.upper(), True, False
+        return idv, name, typ, False, bool(junk)
+
     nodes, edges = {}, []
     for r in rows:
-        nodes.setdefault(r["f"], {"id": r["f"], "label": r["fn"], "type": r["ft"]})
-        nodes.setdefault(r["t"], {"id": r["t"], "label": r["tn"], "type": r["tt"]})
-        edges.append({"source": r["f"], "target": r["t"], "label": r["rel"]})
-    return {"ticker": ticker, "year": year, "nodes": list(nodes.values()),
+        fid, fn, ft, fb, fj = endpoint(r["f"], r["fn"], r["ft"], r.get("fj"), r.get("fg"), r.get("fr"))
+        tid, tn, tt, tb, tj = endpoint(r["t"], r["tn"], r["tt"], r.get("tj"), r.get("tg"), r.get("tr"))
+        if clean and (fj or tj):
+            continue  # drop junk-placeholder edges
+        nodes.setdefault(fid, {"id": fid, "label": fn, "type": ft, "bnode": fb, "junk": fj})
+        nodes.setdefault(tid, {"id": tid, "label": tn, "type": tt, "bnode": tb, "junk": tj})
+        edges.append({"source": fid, "target": tid, "label": r["rel"]})
+    return {"ticker": ticker, "year": year, "clean": clean, "nodes": list(nodes.values()),
             "edges": edges, "shown": len(edges), "total": total}
 
 
