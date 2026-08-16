@@ -55,27 +55,100 @@ def tickers():
 
 
 @app.get("/api/asof")
-def asof(ticker: str, year: int, limit: int = 150, clean: bool = True):
-    """A company's subgraph valid as-of mid-<year>.
+def asof(ticker: str, year: int, limit: int = 140, clean: bool = True, depth: int = 1):
+    """A company's subgraph valid as-of mid-<year>, as a depth-bounded neighborhood of the
+    company node — so the view is always connected (no free-floating concept<->concept islands).
 
-    clean=True (default): drop junk-placeholder edges and skolemize generic-mention hubs into
-    per-company blank nodes (bnodes/bn_<ticker>_<role>). clean=False: the RAW graph as extracted
-    (shared generic hubs + junk placeholders shown) — the 'before' of the cleaning story.
+    depth=1 (default): the company's direct facts (a clean star). depth>=2: also facts among
+    those neighbors, still reachable from the company. clean=True: drop junk placeholders and
+    skolemize generic-mention hubs into per-company bnodes; clean=False: the RAW extraction.
     """
     t = year * 100 + 6
-    rows = aql("""
-        LET flagged = @flagged
-        FOR e IN relations
-          FILTER e.ticker == @tk AND e.validFrom <= @t AND e.validTo > @t
-          SORT (e._to IN flagged OR e._from IN flagged) ? 0 : 1   /* surface flagged-touching edges first */
-          LIMIT @lim
-          LET df = DOCUMENT(e._from)  LET dt = DOCUMENT(e._to)
-          RETURN {f: e._from, fn: df.name, ft: df.type, fj: df.isJunkPlaceholder, fg: df.isGenericMention, fr: df.roleLemma,
-                  t: e._to, tn: dt.name, tt: dt.type, tj: dt.isJunkPlaceholder, tg: dt.isGenericMention, tr: dt.roleLemma,
-                  rel: e.type}""",
-        {"tk": ticker, "t": t, "lim": limit, "flagged": flagged_ids()})
-    total = aql("RETURN LENGTH(FOR e IN relations FILTER e.ticker==@tk AND e.validFrom<=@t AND e.validTo>@t RETURN 1)",
-                {"tk": ticker, "t": t})[0]
+    flagged = flagged_ids()
+
+    if depth <= 1:
+        # one round-trip for total + focal (the company = highest-degree endpoint), one for the star
+        meta = aql("""LET es = (FOR e IN relations FILTER e.ticker==@tk AND e.validFrom<=@t AND e.validTo>@t
+                                   RETURN [e._from, e._to])
+                      RETURN {total: LENGTH(es),
+                              focal: FIRST(FOR p IN es FOR s IN p COLLECT id = s WITH COUNT INTO c
+                                             SORT c DESC LIMIT 1 RETURN id)}""",
+                   {"tk": ticker, "t": t})[0]
+        total, focal = meta["total"], meta["focal"]
+        if not focal:
+            return {"ticker": ticker, "year": year, "clean": clean, "depth": depth,
+                    "focal": None, "nodes": [], "edges": [], "shown": 0, "total": total}
+        rows = aql("""
+            LET flagged = @flagged
+            FOR e IN relations
+              FILTER e.ticker == @tk AND e.validFrom <= @t AND e.validTo > @t
+                 AND (e._from == @focal OR e._to == @focal)   /* incident to the company -> pure star */
+              SORT (e._to IN flagged OR e._from IN flagged) ? 0 : 1
+              LIMIT @lim
+              LET df = DOCUMENT(e._from) LET dt = DOCUMENT(e._to)
+              RETURN {f:e._from, fn:df.name, ft:df.type, fj:df.isJunkPlaceholder, fg:df.isGenericMention, fr:df.roleLemma,
+                      t:e._to, tn:dt.name, tt:dt.type, tj:dt.isJunkPlaceholder, tg:dt.isGenericMention, tr:dt.roleLemma,
+                      rel:e.type}""",
+            {"tk": ticker, "t": t, "lim": limit, "flagged": flagged, "focal": focal})
+    else:
+        # depth>=2: pull the ticker's as-of edges once; derive total + focal + adjacency in Python,
+        # then reveal more of the neighborhood reachable from the company. Keep edges with BOTH
+        # endpoints within <depth> hops, take the flagged-first top (a bigger budget the deeper you
+        # go), then hard-filter to the focal's connected component so truncation can't strand an
+        # island. Done in Python because an `e._from IN keep` AQL filter would use the edge index to
+        # fetch those nodes' edges GLOBALLY, and neighbors include supernodes (net income ~60k) ->
+        # a full-graph blowup + timeout.
+        flagged_set = set(flagged)
+        triples = aql("""FOR e IN relations FILTER e.ticker==@tk AND e.validFrom<=@t AND e.validTo>@t
+                           RETURN {f:e._from, t:e._to, rel:e.type}""", {"tk": ticker, "t": t})
+        total = len(triples)
+        if not triples:
+            return {"ticker": ticker, "year": year, "clean": clean, "depth": depth,
+                    "focal": None, "nodes": [], "edges": [], "shown": 0, "total": 0}
+        deg, adj = {}, {}
+        for e in triples:
+            deg[e["f"]] = deg.get(e["f"], 0) + 1
+            deg[e["t"]] = deg.get(e["t"], 0) + 1
+            adj.setdefault(e["f"], set()).add(e["t"])
+            adj.setdefault(e["t"], set()).add(e["f"])
+        focal = max(deg, key=deg.get)
+        keep, frontier = {focal}, {focal}
+        for _ in range(depth):
+            nxt = set()
+            for n in frontier:
+                nxt |= adj.get(n, set())
+            nxt -= keep
+            keep |= nxt
+            frontier = nxt
+            if len(keep) > 800:
+                break
+        fk = lambda e: 0 if (e["f"] in flagged_set or e["t"] in flagged_set) else 1
+        cand = sorted((e for e in triples if e["f"] in keep and e["t"] in keep), key=fk)
+        cand = cand[: limit + (depth - 1) * 60]           # deeper reveals more (the density knob)
+        # keep only what's reachable from the company over the chosen edges -> no truncation islands
+        nadj = {}
+        for e in cand:
+            nadj.setdefault(e["f"], set()).add(e["t"])
+            nadj.setdefault(e["t"], set()).add(e["f"])
+        reach, frontier = {focal}, [focal]
+        while frontier:
+            n = frontier.pop()
+            for m in nadj.get(n, ()):
+                if m not in reach:
+                    reach.add(m); frontier.append(m)
+        sel = [e for e in cand if e["f"] in reach and e["t"] in reach]
+        ids = list({e["f"] for e in sel} | {e["t"] for e in sel})
+        docs = {}
+        if ids:
+            for row in aql("""FOR id IN @ids LET n = DOCUMENT(id)
+                                RETURN {id: id, name:n.name, type:n.type, junk:n.isJunkPlaceholder,
+                                        gen:n.isGenericMention, role:n.roleLemma}""", {"ids": ids}):
+                docs[row["id"]] = row
+        rows = [{"f":e["f"], "fn":docs.get(e["f"],{}).get("name"), "ft":docs.get(e["f"],{}).get("type"),
+                 "fj":docs.get(e["f"],{}).get("junk"), "fg":docs.get(e["f"],{}).get("gen"), "fr":docs.get(e["f"],{}).get("role"),
+                 "t":e["t"], "tn":docs.get(e["t"],{}).get("name"), "tt":docs.get(e["t"],{}).get("type"),
+                 "tj":docs.get(e["t"],{}).get("junk"), "tg":docs.get(e["t"],{}).get("gen"), "tr":docs.get(e["t"],{}).get("role"),
+                 "rel":e["rel"]} for e in sel]
 
     def endpoint(idv, name, typ, junk, gen, role):  # -> (id, label, type, is_bnode, is_junk)
         if clean and gen and role:
@@ -91,8 +164,8 @@ def asof(ticker: str, year: int, limit: int = 150, clean: bool = True):
         nodes.setdefault(fid, {"id": fid, "label": fn, "type": ft, "bnode": fb, "junk": fj})
         nodes.setdefault(tid, {"id": tid, "label": tn, "type": tt, "bnode": tb, "junk": tj})
         edges.append({"source": fid, "target": tid, "label": r["rel"]})
-    return {"ticker": ticker, "year": year, "clean": clean, "nodes": list(nodes.values()),
-            "edges": edges, "shown": len(edges), "total": total}
+    return {"ticker": ticker, "year": year, "clean": clean, "depth": depth, "focal": focal,
+            "nodes": list(nodes.values()), "edges": edges, "shown": len(edges), "total": total}
 
 
 @app.get("/api/influence")

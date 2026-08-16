@@ -17,6 +17,14 @@
     <label class="ctl grow">As&nbsp;of <b id="yearlbl">2018</b>
       <input id="year" type="range" min="2014" max="2024" step="1" value="2018">
     </label>
+    <label class="ctl" title="Traversal depth from the company node: 1 = direct facts (clean star), 2+ = connected context">
+      Depth
+      <select id="depth">
+        <option value="1" selected>1 · direct</option>
+        <option value="2">2 · context</option>
+        <option value="3">3 · wide</option>
+      </select>
+    </label>
     <label class="ctl toggle" title="Cleaned = junk dropped + generic hubs skolemized; Raw = as extracted">
       <input id="clean" type="checkbox" checked> <span>Cleaned</span>
     </label>

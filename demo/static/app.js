@@ -10,7 +10,8 @@ const colorFor = (t) => TYPE_COLORS[t] || '#8a97ad';
 const $ = (s) => document.querySelector(s);
 const j = (u) => fetch(u).then((r) => r.json());
 
-let cy, ticker = 'aapl', year = 2018, clean = true;
+let cy, ticker = 'aapl', year = 2018, clean = true, depth = 1, firstForTicker = true, fitNext = false;
+const LIMIT = 140;
 
 function initCy() {
   cy = cytoscape({
@@ -18,43 +19,100 @@ function initCy() {
     style: [
       { selector: 'node', style: {
         'background-color': 'data(color)', 'label': 'data(label)', 'color': '#cfd8e6',
-        'font-size': '9px', 'text-wrap': 'wrap', 'text-max-width': '78px',
-        'width': 'mapData(deg,1,25,13,44)', 'height': 'mapData(deg,1,25,13,44)',
-        'text-valign': 'bottom', 'text-margin-y': '2px', 'border-width': 0 } },
+        'font-size': '9px', 'text-wrap': 'wrap', 'text-max-width': '84px',
+        'width': 'mapData(deg,1,25,14,46)', 'height': 'mapData(deg,1,25,14,46)',
+        'text-valign': 'bottom', 'text-margin-y': '2px', 'border-width': 0,
+        'min-zoomed-font-size': 6,
+        'transition-property': 'opacity, background-color, width, height', 'transition-duration': '280ms' } },
       { selector: 'node.company', style: {
         'background-color': '#ffffff', 'border-color': '#5b8def', 'border-width': 4,
-        'font-size': '14px', 'color': '#ffffff', 'font-weight': 'bold',
-        'width': 54, 'height': 54, 'z-index': 20 } },
+        'font-size': '15px', 'color': '#ffffff', 'font-weight': 'bold',
+        'width': 56, 'height': 56, 'z-index': 30, 'min-zoomed-font-size': 0 } },
       { selector: 'node.bnode', style: {
         'border-color': '#4ec98a', 'border-width': 2, 'border-style': 'dashed', 'shape': 'round-rectangle' } },
       { selector: 'node.junk', style: {
         'background-color': '#e46a6a', 'border-color': '#e46a6a', 'shape': 'diamond', 'opacity': 0.9 } },
+      { selector: 'node.faded', style: { 'opacity': 0 } },
       { selector: 'edge', style: {
         'width': 1, 'line-color': '#31405c', 'target-arrow-color': '#31405c',
         'target-arrow-shape': 'triangle', 'arrow-scale': 0.7, 'curve-style': 'bezier',
         'label': 'data(label)', 'font-size': '7px', 'color': '#576a82',
-        'text-rotation': 'autorotate', 'opacity': 0.85 } },
+        'text-rotation': 'autorotate', 'opacity': 0.8, 'min-zoomed-font-size': 7,
+        'transition-property': 'opacity, line-color', 'transition-duration': '280ms' } },
+      { selector: 'edge.faded', style: { 'opacity': 0 } },
     ],
   });
 }
 
+const edgeKey = (e) => `${e.source}~${e.label}~${e.target}`;
+
+// Incremental, animated update: diff against what's on the canvas, glide the survivors,
+// fade newcomers in / departures out, and keep the company node pinned at the center.
 async function loadGraph() {
-  const d = await j(`/api/asof?ticker=${ticker}&year=${year}&limit=150&clean=${clean}`);
+  const d = await j(`/api/asof?ticker=${ticker}&year=${year}&limit=${LIMIT}&clean=${clean}&depth=${depth}`);
   const deg = {};
   d.edges.forEach((e) => { deg[e.source] = (deg[e.source] || 0) + 1; deg[e.target] = (deg[e.target] || 0) + 1; });
-  const els = [];
+  const wantN = new Map(d.nodes.map((n) => [n.id, n]));
+  const wantE = new Map(d.edges.map((e) => [edgeKey(e), e]));
+  const focalId = d.focal;
+
+  // newcomers are born near the focal so they animate outward
+  const fEle = focalId ? cy.getElementById(focalId) : cy.collection();
+  const fpos = fEle.nonempty() ? fEle.position() : { x: 0, y: 0 };
+  const near = () => ({ x: fpos.x + (Math.random() - 0.5) * 60, y: fpos.y + (Math.random() - 0.5) * 60 });
+
+  cy.startBatch();
+  cy.nodes().forEach((n) => { if (!wantN.has(n.id())) { n.addClass('faded'); n.data('_gone', 1); } });
+  cy.edges().forEach((e) => { if (!wantE.has(e.id())) { e.addClass('faded'); e.data('_gone', 1); } });
   d.nodes.forEach((n) => {
     const cls = [];
-    if (n.label === ticker && !n.bnode) cls.push('company');
+    if (n.id === focalId && !n.bnode) cls.push('company');
     if (n.bnode) cls.push('bnode');
     if (n.junk) cls.push('junk');
-    els.push({ data: { id: n.id, label: n.label, type: n.type, color: colorFor(n.type), deg: deg[n.id] || 1 }, classes: cls.join(' ') });
+    const ex = cy.getElementById(n.id);
+    if (ex.nonempty()) {
+      ex.data({ label: n.label, type: n.type, color: colorFor(n.type), deg: deg[n.id] || 1 });
+      ex.classes(cls.join(' '));
+    } else {
+      cls.push('faded');
+      cy.add({ group: 'nodes', data: { id: n.id, label: n.label, type: n.type, color: colorFor(n.type), deg: deg[n.id] || 1 }, classes: cls.join(' '), position: near() });
+    }
   });
-  d.edges.forEach((e, i) => els.push({ data: { id: 'e' + i, source: e.source, target: e.target, label: e.label } }));
-  cy.elements().remove();
-  cy.add(els);
-  cy.layout({ name: 'cose', animate: false, nodeRepulsion: 9000, idealEdgeLength: 72, padding: 34 }).run();
-  $('#meta').textContent = `${d.shown} of ${d.total.toLocaleString()} facts · as of mid-${year}` + (clean ? '' : ' · RAW (uncleaned)');
+  d.edges.forEach((e) => {
+    const id = edgeKey(e);
+    if (cy.getElementById(id).empty()) {
+      cy.add({ group: 'edges', data: { id, source: e.source, target: e.target, label: e.label }, classes: 'faded' });
+    }
+  });
+  cy.endBatch();
+
+  // keep the company node put: let it settle to the centre on the first layout (it's tied to every
+  // leaf, so it lands central by symmetry), then lock it there so later years don't move it
+  const focal = focalId ? cy.getElementById(focalId) : cy.collection();
+  if (focal.nonempty()) { if (firstForTicker) focal.unlock(); else focal.lock(); }
+
+  requestAnimationFrame(() => cy.elements('.faded').not('[_gone]').removeClass('faded')); // fade newcomers in
+  setTimeout(() => cy.elements('[_gone]').remove(), 300);                                  // drop departures after fade
+
+  const layout = cy.layout({
+    name: 'cose', animate: true, animationDuration: 640, refresh: 12,
+    randomize: firstForTicker, fit: false,
+    nodeRepulsion: 20000, idealEdgeLength: 95, edgeElasticity: 120,
+    gravity: 0.35, numIter: 1200, nodeOverlap: 26, componentSpacing: 140,
+    coolingFactor: 0.96, padding: 40,
+  });
+  layout.one('layoutstop', () => {
+    if (focal.nonempty() && firstForTicker) focal.lock();     // pin wherever the hub centred
+    if (focal.nonempty()) {
+      if (firstForTicker || fitNext) cy.animate({ fit: { eles: cy.elements(':visible'), padding: 55 } }, { duration: 380 });
+      else cy.animate({ center: { eles: focal } }, { duration: 300 }); // keep the company at screen centre
+    }
+    firstForTicker = false; fitNext = false;
+  });
+  layout.run();
+
+  $('#meta').textContent = `${d.shown} of ${d.total.toLocaleString()} facts · depth ${depth} · as of mid-${year}` + (clean ? '' : ' · RAW');
+  window.__frkg = { focal: focalId, nodes: cy.nodes(':visible').length, edges: cy.edges(':visible').length, depth };
 }
 
 async function loadInfluence() {
@@ -99,7 +157,8 @@ function onSlider(v) { year = +v; $('#yearlbl').textContent = year; clearTimeout
     .map((t) => `<span><i style="background:${colorFor(t)}"></i>${t}</span>`).join('');
   $('#ticker').value = ticker;
   yr.addEventListener('input', (e) => onSlider(e.target.value));
-  $('#ticker').addEventListener('change', (e) => { const v = e.target.value.trim().toLowerCase(); if (v) { ticker = v; refreshAll(); } });
+  $('#ticker').addEventListener('change', (e) => { const v = e.target.value.trim().toLowerCase(); if (v) { ticker = v; firstForTicker = true; refreshAll(); } });
+  $('#depth').addEventListener('change', (e) => { depth = +e.target.value; fitNext = true; loadGraph(); });
   $('#clean').addEventListener('change', (e) => { clean = e.target.checked; loadGraph(); });
   refreshAll();
 })();
