@@ -1,6 +1,6 @@
 # PRD — FinReflectKG on ArangoDB (Proof of Concept)
 
-**Status:** Draft v0.17 · 2026-08-13 (P4 PageRank-per-year re-run on comparable cleaned snapshots — generic-mention rewiring + junk-placeholder exclusion; resume-skip no longer ranks stale years)
+**Status:** Draft v0.18 · 2026-08-15 (G9-P5: interactive time-travel demo visualizer documented as a §4.8 sub-capability — FastAPI + vendored Cytoscape, live vs FinReflectKgTemporal, with a Cleaned/Raw generic-mention toggle)
 **Authors:** Arthur Keen (ArangoDB)
 **Related docs:** [data-analysis.md](data-analysis.md) · [etl-plan.md](etl-plan.md) ·
 [load-report.md](load-report.md) · [sharding-analysis.md](sharding-analysis.md) ·
@@ -11,6 +11,16 @@
 
 ## 0. Changelog
 
+- **v0.18 (2026-08-15):** **Interactive time-travel demo visualizer (G9/§4.8 — P5).** The
+  time-travel layer now has a dedicated, local, live demo UI ([demo/](../demo/), FastAPI +
+  vendored Cytoscape.js, read-only vs `FinReflectKgTemporal`): a time-slider as-of view,
+  an influence-over-time panel (GAE PageRank per anchor year), a company explorer with
+  year-over-year appeared/disappeared diffs + backward-looking disclosures, and a
+  **Cleaned/Raw toggle** that shows the generic-mention cleanup (junk dropped + generic hubs
+  skolemized to per-company bnodes) side-by-side with the raw extraction. Deliverables:
+  [demo/api.py](../demo/api.py), `demo/static/*`, [demo/screenshot.sh](../demo/screenshot.sh).
+  Documented as §4.8 sub-capability P5 (was code-ahead-of-PRD; promoted via /prd-sync patch
+  `domyn_G9-P5_20260815`).
 - **v0.17 (2026-08-13):** **P4 PageRank-per-year on comparable cleaned snapshots.** The first
   GAE run reused cached `gae_pr_*` collections without checking the snapshot they came from,
   so 2019 was ranked off an 8.5%-complete snapshot (166,935 vs 1.96 M edges) and 2024 off
@@ -542,6 +552,19 @@ collections, compared across years. Snapshots rewire flagged generic-mention end
 per-company bnodes and drop junk placeholders (`isJunkPlaceholder`); resume-skip is gated
 on snapshot freshness so years stay comparable (v0.17). Live ranks: `net income` #1 in
 2014 / 2019 / 2020 / 2024.
+
+**Interactive demo — G9-P5.** A lightweight, **local, live** demo visualizer ([demo/](../demo/),
+FastAPI + **vendored** Cytoscape.js, read-only vs `FinReflectKgTemporal`) makes the time-travel
+layer explorable end-to-end: (1) a **time-slider as-of view** that re-renders a company's subgraph
+at any instant 2014→2024 (valid-time `validFrom`/`validTo`); (2) an **influence-over-time** panel
+(top entities by GAE PageRank at the anchor year nearest the slider, `gae_pr_2014/2019/2020/2024`);
+(3) a **company explorer** with year-over-year appeared/disappeared diffs and backward-looking
+disclosures (P3). A **Cleaned/Raw toggle** demonstrates the generic-mention cleanup: *Cleaned* drops
+junk placeholders (`isJunkPlaceholder`) and skolemizes generic-mention hubs into per-company bnodes
+(dashed green); *Raw* shows the graph as extracted (shared hubs + junk diamonds). Endpoints:
+`/api/{years,tickers,asof,influence,diff,backward}`. Deliverables:
+[demo/api.py](../demo/api.py), `demo/static/*`, [demo/screenshot.sh](../demo/screenshot.sh); run
+`uvicorn demo.api:app`. **Status: built (v1.1, v0.18).**
 
 ## 5. Sizing (from data analysis)
 
