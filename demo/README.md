@@ -4,12 +4,19 @@ A lightweight, **local, live** demo of the FinReflectKG time-travel layer (G9/§
 against the `FinReflectKgTemporal` database. Fresh build (FastAPI + Cytoscape.js), no framework
 build step.
 
-## What it shows (v1)
-- **Time-slider as-of view** — scrub 2014→2024; a company's subgraph re-renders at that instant
-  (valid-time `validFrom`/`validTo`). The company node is **pinned at the centre** and the change
-  between years **animates** (survivors glide, facts fade in / out). A **Depth** control (1 = direct
-  facts / 2–3 = connected context) trades readability for reach; the view is always a *connected*
-  neighbourhood of the company, so there are no free-floating concept↔concept islands.
+## What it shows (v1.3)
+- **DVR time-slider** — scrub 2014→2024 and the company's subgraph **crossfades** between years,
+  DVR-style. The whole decade arrives in one `/api/timeline` payload; the union of all years is laid
+  out **once** with stable positions, so scrubbing is pure client-side (no fetch, no relayout). The
+  company node is **pinned at the centre**; facts fade in / out as they appear / disappear.
+- **Depth** control (1 = direct-facts star / 2–3 = connected context). The view is always a
+  *connected* neighbourhood of the company — no free-floating concept↔concept islands.
+- **Valid / Reported time toggle** — *valid* = what **held** at mid-year (`validFrom`/`validTo`);
+  *reported* = what the filing **asserted** that year (`year`, transaction time). The bitemporal
+  (P3) axis, made interactive.
+- **Legend = type filters** — click a legend swatch to show / hide that entity type.
+- **Top-N PageRank filter** (Influence panel) — restrict the graph to the most globally-influential
+  entities at the current anchor year.
 - **Influence over time** — top entities by GAE PageRank at the anchor year nearest the slider
   (`gae_pr_2014/2019/2020/2024`).
 - **Company explorer + diffs** — year-over-year *appeared / disappeared* facts (vs 2014) and
@@ -23,8 +30,9 @@ build step.
 ```
 
 ## Endpoints (backend)
-`GET /api/years` · `GET /api/tickers` · `GET /api/asof?ticker=&year=&limit=&depth=&clean=` ·
-`GET /api/influence?year=&top=` · `GET /api/diff?ticker=&from=&to=` · `GET /api/backward?ticker=&lag=`
+`GET /api/years` · `GET /api/tickers` · `GET /api/timeline?ticker=&depth=&clean=&axis=` (all years, one payload) ·
+`GET /api/asof?ticker=&year=&limit=&depth=&clean=` · `GET /api/influence?year=&top=` ·
+`GET /api/prranks?year=&top=` · `GET /api/diff?ticker=&from=&to=` · `GET /api/backward?ticker=&lag=`
 
 ## Notes
 - Read-only; uses the stdlib REST helper (`scripts/arango.py`) driven by `.env`.

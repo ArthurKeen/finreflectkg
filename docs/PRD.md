@@ -1,6 +1,6 @@
 # PRD — FinReflectKG on ArangoDB (Proof of Concept)
 
-**Status:** Draft v0.18 · 2026-08-15 (G9-P5: interactive time-travel demo visualizer documented as a §4.8 sub-capability — FastAPI + vendored Cytoscape, live vs FinReflectKgTemporal, with a Cleaned/Raw generic-mention toggle)
+**Status:** Draft v0.19 · 2026-08-16 (G9-P5 demo v1.3: DVR-scrub timeline with a pinned/animated connected neighbourhood + Depth control, a valid/reported bitemporal-axis toggle, legend type-filters, and a Top-N PageRank filter)
 **Authors:** Arthur Keen (ArangoDB)
 **Related docs:** [data-analysis.md](data-analysis.md) · [etl-plan.md](etl-plan.md) ·
 [load-report.md](load-report.md) · [sharding-analysis.md](sharding-analysis.md) ·
@@ -11,6 +11,15 @@
 
 ## 0. Changelog
 
+- **v0.19 (2026-08-16):** **Demo v1.3 — DVR timeline + bitemporal/PageRank interactivity (G9-P5).**
+  The as-of view now renders a **connected neighbourhood** of the company (depth 1 = direct-facts
+  star; a **Depth** control expands to 2–3 hops), with the company node **pinned at the centre** and
+  the decade scrubbable **DVR-style** (one `/api/timeline` payload, union laid out once, slider
+  crossfades between years — no per-year relayout). Adds a **valid/reported** bitemporal-axis toggle
+  (valid-time vs the filing's transaction-time — P3 made interactive), a **legend that doubles as
+  type filters**, and a **Top-N PageRank** filter (`/api/prranks`) that restricts the view to the
+  most globally-influential entities. Connected-component filtering guarantees no concept↔concept
+  islands. Applies accepted patch `domyn_G9-P5_clarify_20260816`.
 - **v0.18 (2026-08-15):** **Interactive time-travel demo visualizer (G9/§4.8 — P5).** The
   time-travel layer now has a dedicated, local, live demo UI ([demo/](../demo/), FastAPI +
   vendored Cytoscape.js, read-only vs `FinReflectKgTemporal`): a time-slider as-of view,
@@ -555,16 +564,24 @@ on snapshot freshness so years stay comparable (v0.17). Live ranks: `net income`
 
 **Interactive demo — G9-P5.** A lightweight, **local, live** demo visualizer ([demo/](../demo/),
 FastAPI + **vendored** Cytoscape.js, read-only vs `FinReflectKgTemporal`) makes the time-travel
-layer explorable end-to-end: (1) a **time-slider as-of view** that re-renders a company's subgraph
-at any instant 2014→2024 (valid-time `validFrom`/`validTo`); (2) an **influence-over-time** panel
-(top entities by GAE PageRank at the anchor year nearest the slider, `gae_pr_2014/2019/2020/2024`);
-(3) a **company explorer** with year-over-year appeared/disappeared diffs and backward-looking
-disclosures (P3). A **Cleaned/Raw toggle** demonstrates the generic-mention cleanup: *Cleaned* drops
-junk placeholders (`isJunkPlaceholder`) and skolemizes generic-mention hubs into per-company bnodes
-(dashed green); *Raw* shows the graph as extracted (shared hubs + junk diamonds). Endpoints:
-`/api/{years,tickers,asof,influence,diff,backward}`. Deliverables:
+layer explorable end-to-end. The as-of view renders a **connected neighbourhood of the company**
+(depth 1 = the direct-facts star; a **Depth** control expands to 2–3 hops of context), with the
+company node **pinned at the centre** and the whole decade scrubbable **DVR-style**: one
+`/api/timeline` payload carries all years, the union is laid out once with stable positions, so
+dragging the slider **crossfades** between years (facts glide / fade in / fade out) with no relayout.
+A connected-component filter guarantees no free-floating concept↔concept islands. A **valid/reported
+time toggle** switches the axis between valid-time (what *held* at mid-year, `validFrom`/`validTo`)
+and transaction-time (what a filing *reported* that year, `year`) — the bitemporal P3 capability made
+interactive. Overlays: an **influence-over-time** panel (top entities by GAE PageRank at the anchor
+year nearest the slider, `gae_pr_2014/2019/2020/2024`); a **company explorer** with year-over-year
+appeared/disappeared diffs and backward-looking disclosures (P3); a **Cleaned/Raw toggle** that
+demonstrates the generic-mention cleanup (*Cleaned* drops junk placeholders and skolemizes
+generic-mention hubs into per-company bnodes; *Raw* shows the graph as extracted); a **legend that
+doubles as type filters**; and a **Top-N PageRank slider** that restricts the view to the most
+globally-influential entities. Endpoints:
+`/api/{years,tickers,asof,timeline,influence,prranks,diff,backward}`. Deliverables:
 [demo/api.py](../demo/api.py), `demo/static/*`, [demo/screenshot.sh](../demo/screenshot.sh); run
-`uvicorn demo.api:app`. **Status: built (v1.1, v0.18).**
+`uvicorn demo.api:app`. **Status: built (v1.3, v0.19).**
 
 ## 5. Sizing (from data analysis)
 

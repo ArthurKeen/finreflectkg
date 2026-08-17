@@ -25,10 +25,17 @@ app = FastAPI(title="FinReflectKG Time-Travel Demo")
 
 
 def aql(query, bind=None, timeout=60):
-    st, b = req("POST", "/_api/cursor", {"query": query, "bindVars": bind or {}}, db=DB, timeout=timeout)
+    st, b = req("POST", "/_api/cursor", {"query": query, "bindVars": bind or {}, "batchSize": 50000}, db=DB, timeout=timeout)
     if st not in (200, 201):
         raise HTTPException(status_code=502, detail=f"AQL {st}: {b.get('errorMessage')}")
-    return b.get("result", [])
+    result = b.get("result", [])
+    cid = b.get("id")
+    while b.get("hasMore") and cid:  # page the cursor — default batches cap at 1000 rows
+        st, b = req("PUT", f"/_api/cursor/{cid}", None, db=DB, timeout=timeout)
+        if st not in (200, 201):
+            raise HTTPException(status_code=502, detail=f"AQL cursor {st}: {b.get('errorMessage')}")
+        result.extend(b.get("result", []))
+    return result
 
 
 _flagged_ids = None
@@ -166,6 +173,107 @@ def asof(ticker: str, year: int, limit: int = 140, clean: bool = True, depth: in
         edges.append({"source": fid, "target": tid, "label": r["rel"]})
     return {"ticker": ticker, "year": year, "clean": clean, "depth": depth, "focal": focal,
             "nodes": list(nodes.values()), "edges": edges, "shown": len(edges), "total": total}
+
+
+def _select_neighborhood(ye, focal, depth, limit, flagged):
+    """Depth-bounded, always-connected edge selection over a year's edge list `ye` (each {f,t,rel}).
+    depth 1 = edges incident to focal (star). depth>=2 = BFS to <depth> hops, both-endpoints-in-keep,
+    flagged-first, bigger budget the deeper you go, then filtered to the focal's connected component."""
+    fk = lambda e: 0 if (e["f"] in flagged or e["t"] in flagged) else 1
+    if depth <= 1:
+        return sorted((e for e in ye if e["f"] == focal or e["t"] == focal), key=fk)[:limit]
+    adj = {}
+    for e in ye:
+        adj.setdefault(e["f"], set()).add(e["t"])
+        adj.setdefault(e["t"], set()).add(e["f"])
+    keep, frontier = {focal}, {focal}
+    for _ in range(depth):
+        nxt = set()
+        for n in frontier:
+            nxt |= adj.get(n, set())
+        nxt -= keep
+        keep |= nxt
+        frontier = nxt
+        if len(keep) > 800:
+            break
+    cand = sorted((e for e in ye if e["f"] in keep and e["t"] in keep), key=fk)[: limit + (depth - 1) * 60]
+    nadj = {}
+    for e in cand:
+        nadj.setdefault(e["f"], set()).add(e["t"])
+        nadj.setdefault(e["t"], set()).add(e["f"])
+    reach, fr = {focal}, [focal]
+    while fr:
+        n = fr.pop()
+        for m in nadj.get(n, ()):
+            if m not in reach:
+                reach.add(m); fr.append(m)
+    return [e for e in cand if e["f"] in reach and e["t"] in reach]
+
+
+@app.get("/api/timeline")
+def timeline(ticker: str, depth: int = 1, clean: bool = True, axis: str = "valid", limit: int = 140):
+    """All years' subgraphs in one payload, so the client can scrub the slider smoothly (DVR): it
+    lays the union out once and crossfades between years. axis='valid' -> valid-time (what held at
+    mid-year); axis='reported' -> transaction-time (facts a filing asserted that year, e.year==Y)."""
+    flagged = set(flagged_ids())
+    edges = aql("""FOR e IN relations FILTER e.ticker==@tk
+                     RETURN {f:e._from, t:e._to, rel:e.type, vf:e.validFrom, vt:e.validTo, yr:e.year}""",
+                {"tk": ticker}, timeout=120)
+    if not edges:
+        return {"ticker": ticker, "focal": None, "depth": depth, "clean": clean, "axis": axis, "years": {}}
+    deg = {}
+    for e in edges:
+        deg[e["f"]] = deg.get(e["f"], 0) + 1
+        deg[e["t"]] = deg.get(e["t"], 0) + 1
+    focal = max(deg, key=deg.get)                    # the company: highest-degree endpoint overall
+    sel_by_year, all_ids = {}, set()
+    for Y in range(YEAR_MIN, YEAR_MAX + 1):
+        if axis == "reported":
+            ye = [e for e in edges if e["yr"] == Y]
+        else:
+            tt = Y * 100 + 6
+            ye = [e for e in edges if e["vf"] <= tt and e["vt"] > tt]
+        sel = _select_neighborhood(ye, focal, depth, limit, flagged)
+        sel_by_year[Y] = (sel, len(ye))
+        for e in sel:
+            all_ids.add(e["f"]); all_ids.add(e["t"])
+    docs = {}
+    if all_ids:
+        for row in aql("""FOR id IN @ids LET n = DOCUMENT(id)
+                            RETURN {id: id, name:n.name, type:n.type, junk:n.isJunkPlaceholder,
+                                    gen:n.isGenericMention, role:n.roleLemma}""", {"ids": list(all_ids)}, timeout=120):
+            docs[row["id"]] = row
+
+    def endpoint(idv):  # -> (id, label, type, is_bnode, is_junk)
+        d = docs.get(idv, {})
+        if clean and d.get("gen") and d.get("role"):
+            role = d["role"]
+            return f"bnodes/bn_{ticker}_{role}", role, role.upper(), True, False
+        return idv, d.get("name"), d.get("type"), False, bool(d.get("junk"))
+
+    years = {}
+    for Y, (sel, total) in sel_by_year.items():
+        nodes, elist = {}, []
+        for e in sel:
+            fid, fn, ft, fb, fj = endpoint(e["f"])
+            tid, tn, tt2, tb, tj = endpoint(e["t"])
+            if clean and (fj or tj):
+                continue
+            nodes.setdefault(fid, {"id": fid, "label": fn, "type": ft, "bnode": fb, "junk": fj})
+            nodes.setdefault(tid, {"id": tid, "label": tn, "type": tt2, "bnode": tb, "junk": tj})
+            elist.append({"source": fid, "target": tid, "label": e["rel"]})
+        years[str(Y)] = {"nodes": list(nodes.values()), "edges": elist, "shown": len(elist), "total": total}
+    return {"ticker": ticker, "focal": focal, "depth": depth, "clean": clean, "axis": axis, "years": years}
+
+
+@app.get("/api/prranks")
+def prranks(year: int, top: int = 300):
+    """Ranked node ids (most influential first) by GAE PageRank at the anchor year nearest <year> —
+    powers the Top-N PageRank filter (client keeps the top-N as a visibility mask)."""
+    anchor = min(ANCHORS, key=lambda a: abs(a - year))
+    ids = aql(f"""FOR r IN gae_pr_{anchor} SORT r.rank DESC LIMIT @top
+                   RETURN CONTAINS(r.id, '/') ? r.id : CONCAT('Node/', r.id)""", {"top": top})
+    return {"anchor": anchor, "ids": ids}
 
 
 @app.get("/api/influence")

@@ -25,6 +25,13 @@
         <option value="3">3 · wide</option>
       </select>
     </label>
+    <label class="ctl" title="Valid = what HELD at mid-year (validFrom/validTo); Reported = what the filing ASSERTED that year (transaction time)">
+      Time
+      <select id="axis">
+        <option value="valid" selected>valid</option>
+        <option value="reported">reported</option>
+      </select>
+    </label>
     <label class="ctl toggle" title="Cleaned = junk dropped + generic hubs skolemized; Raw = as extracted">
       <input id="clean" type="checkbox" checked> <span>Cleaned</span>
     </label>
@@ -36,6 +43,10 @@
     <aside>
       <section>
         <h2>Influence <small id="infhdr"></small></h2>
+        <label class="prctl" title="Restrict the graph to the top-N entities by global PageRank (this anchor year)">
+          <span>Graph filter: top <b id="prlbl">all</b> by PageRank</span>
+          <input id="pr" type="range" min="0" max="300" step="10" value="0">
+        </label>
         <ol id="influence" class="rank"></ol>
       </section>
       <section>
