@@ -28,3 +28,22 @@ nl_corrections.db
 .prd-drift-queue/
 .claude/
 CLAUDE.md
+.no-drift-gate
+.cursor/.shared-memory-sessions/
+.cursor/hooks.json.pre-update.*
+.cursor/hooks/*.pre-update.*
+
+# Generated run artifacts under data/ (logs, agentic checkpoints, rendered reports).
+# data/raw + data/staging are already ignored above; these are the remaining ~2 MB of
+# regenerable output that was still committable.
+data/*.log
+data/analytics_agentic/checkpoint_*.json
+data/analytics_report_*.html
+data/demo_screenshot.png
+
+# Shared-memory / drift tooling scratch (local-only, never published)
+.pattern-capture-queue/
+.prd-sync-pending-*.md
+
+# Editor + tool backups
+*.bak
