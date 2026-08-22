@@ -73,8 +73,9 @@ def _load_env(path=ROOT / ".env"):
 def _make_provider(env):
     """Construct the configured LLM provider (explicit, not auto-detect).
 
-    arango-cypher-py's get_llm_provider() prioritizes OpenAI on auto-detect; this
-    deployment uses Anthropic (see scripts/llm.py), so pick by LLM_PROVIDER / key.
+    arango-cypher-py's get_llm_provider() prioritizes OpenAI on auto-detect; pick
+    explicitly by LLM_PROVIDER / key instead. This deployment pins
+    `LLM_PROVIDER=openai` in .env (the Anthropic key is revoked — see .env).
     """
     from arango_cypher.nl2cypher import AnthropicProvider, OpenAIProvider, OpenRouterProvider
 
