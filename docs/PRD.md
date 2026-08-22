@@ -1,6 +1,6 @@
 # PRD — FinReflectKG on ArangoDB (Proof of Concept)
 
-**Status:** Draft v0.19 · 2026-08-16 (G9-P5 demo v1.3: DVR-scrub timeline with a pinned/animated connected neighbourhood + Depth control, a valid/reported bitemporal-axis toggle, legend type-filters, and a Top-N PageRank filter)
+**Status:** Draft v0.21 · 2026-08-21 (G9-P5 demo v1.5 — off-edge render fix, real multi-hop context at depth ≥ 2, corpus-wide PageRank filter relabelled, light-default theme; corrects v0.20's account of the off-edge defect)
 **Authors:** Arthur Keen (ArangoDB)
 **Related docs:** [data-analysis.md](data-analysis.md) · [etl-plan.md](etl-plan.md) ·
 [load-report.md](load-report.md) · [sharding-analysis.md](sharding-analysis.md) ·
@@ -11,6 +11,52 @@
 
 ## 0. Changelog
 
+- **v0.21 (2026-08-21):** **Demo v1.5 — three G9-P5 defects fixed, one of them a correction to
+  v0.20's own account.** **(1) Edges rendered without nodes.** Not mark separation, as v0.20
+  recorded: Cytoscape resolves same-property conflicts by *rule order*, and the `.off` rule sat
+  **before** the base `edge` rule, so a hidden edge kept its `opacity: 0.75` while its node
+  correctly vanished — arrowheads into empty space, in both themes. `.off` now sorts last and
+  zeroes the arrow explicitly. The v1.4 counter read 0 throughout because it only tested
+  `hasClass('off')` (the model, which was right) and never the resolved style (the render, which
+  was wrong); it now reports **`modelOrphans`** (an edge we mean to show whose endpoint is hidden)
+  and **`paintLeaks`** (an edge we mean to hide that is still painted, read from
+  `e.style('opacity')`). **(2) Depth ≥ 2 returned no multi-hop edges.** The BFS was correct, but a
+  company node is incident to ~99 % of its own neighbourhood (`aapl` 2021: 2,004 of 2,024 edges),
+  so a flat budget slice spent every slot on the star and depth 2/3 were merely denser stars.
+  Selection now budgets star and context **separately** and takes each context edge together with
+  the shortest path anchoring it to the company, so the connected-component filter cannot strip it
+  — depth 2/3 now yield 20 real concept↔concept edges, surfaced in the header as
+  `depth N (M context)`. `/api/asof` carried a second copy of this logic and now **delegates** to
+  the shared selector (32 duplicated lines removed); both selection queries gained a
+  deterministic `SORT e._key`, without which row order — and so the rendered picture — varied
+  between runs. **(3) The Top-N PageRank control read as broken.** It ranks **corpus-wide**, so
+  "top 200" keeps only the global leaders that happen to sit in one company's neighbourhood — 20
+  of 219 for `aapl` 2018. The label now says `global PageRank top N — X of Y here`. **(4)** Light
+  is now the **unconditional** default; the OS `prefers-color-scheme` fallback was removed so a
+  demo on a dark-mode laptop still opens light unless the presenter chose dark.
+- **v0.20 (2026-08-20):** **G8 report stage wired · eval figures provider-qualified · demo v1.4
+  theming.** Three accepted PRD patches. **(1) §4.7 reporting
+  (`domyn_REQ-011_20260819`, obsolete):** the v0.13 claim that the NL→execute→report loop is
+  "not wired here" was half wrong — the **report stage is wired** via
+  [scripts/analytics_report.py](../scripts/analytics_report.py), which supplies the
+  `AnalysisResult`→`ExecutionResult` adapter the package does not ship. Verified on `gae_pr_2024`:
+  88 KB HTML, 3 Plotly charts, 3 insights, 3 recommendations. Two causes had hidden the whole
+  layer: no adapter, and plotly absent so charts degraded through a silent optional import.
+  Only the **autonomous chaining** remains pending. **(2) §4.6 provider attribution
+  (`domyn_REQ-006_20260813`, clarification):** LLM-dependent scores are now published **with the
+  provider and model that produced them**. GraphRAG answer synthesis is **4/5 (`openai/gpt-4o`)**,
+  not 5/5 — the 5/5 was `anthropic/claude-sonnet-4-5` and is not reproducible since that key was
+  revoked. Not a code regression: retrieval and grounding are unchanged (60 facts, all grounded);
+  the one failure is a false abstention on the CINF stake question. NL→Cypher 19/22 · 9/22 is
+  `openai/gpt-4o-mini` and stands. **(3) §4.8 G9-P5 demo v1.4 (`domyn_G9-P5_theme_20260819`,
+  clarification):** the **ArangoDB brand palette and light/dark theme contract are now shared with
+  the r2g Studio** (light default, `data-theme` opt-in, pre-paint resolution, persisted choice).
+  Because Cytoscape bakes its stylesheet at construction, the canvas reads the CSS tokens and is
+  re-styled on toggle. Node marks gained a surface-coloured ring and a raised minimum size so they
+  read against edges, arrowheads and labels in both themes. *(Corrected in v0.21: this entry
+  originally credited a dangling-edge counter with diagnosing a "missing nodes" report as mark
+  separation. That was wrong — the counter read 0 because it inspected class state rather than
+  resolved style, and the real cause was stylesheet rule ordering.)*
 - **v0.19 (2026-08-16):** **Demo v1.3 — DVR timeline + bitemporal/PageRank interactivity (G9-P5).**
   The as-of view now renders a **connected neighbourhood** of the company (depth 1 = direct-facts
   star; a **Depth** control expands to 2–3 hops), with the company node **pinned at the centre** and
@@ -78,7 +124,9 @@
   layer (its steps end at `save_outputs`/use-cases); GAE **execution** is the
   deterministic base ([scripts/analytics.py](../scripts/analytics.py), verified) that the
   plan's algorithms feed into. The fully-autonomous NL→execute→report loop is a separate
-  mode of the tool (`graph_analytics_ai/ai/agents/`), not wired here. *(Also fixed this
+  mode of the tool (`graph_analytics_ai/ai/agents/`), not wired here — **superseded in
+  v0.20: the report stage was wired ([scripts/analytics_report.py](../scripts/analytics_report.py));
+  only the autonomous chaining remains unwired.** *(Also fixed this
   repo's PRD-drift gate: `drift_queue.py` was queuing cross-repo edits — now scoped to
   files inside this repo, excluding `.claude/`; `drift_stop_gate.sh` PRD-count `0\n0`
   glitch cleaned. `.claude/` is gitignored so those are local-only.)*
@@ -129,10 +177,12 @@
   ([scripts/nl2cypher_eval.py](../scripts/nl2cypher_eval.py)): **19/22 transpile,
   9/22 execute** with **0 `MAPPING_NOT_FOUND`** — the vocabulary gap that capped the
   hand-written path disappears when the model writes in the ontology's own labels
-  (CINF-stake queries **0 → 219 rows**). **GraphRAG answer synthesis** scored **5/5**
-  on a rubric ([scripts/graphrag_rubric.py](../scripts/graphrag_rubric.py)), including
+  (CINF-stake queries **0 → 219 rows**). **GraphRAG answer synthesis** scored **5/5
+  on `anthropic/claude-sonnet-4-5`** at the time
+  ([scripts/graphrag_rubric.py](../scripts/graphrag_rubric.py)), including
   a faithful abstention on an out-of-scope question and catching an inverted-premise
-  question. **Root-caused the gold-set vocabulary mismatch against live data:** the
+  question. **Superseded — see §4.6 "LLM-dependent figures are provider-scoped":**
+  that key was later revoked and the current configured provider scores **4/5**. **Root-caused the gold-set vocabulary mismatch against live data:** the
   gold Cypher was authored against a **sibling schema** (`:RISK` vs this graph's
   `RISK_FACTOR`); `ORG_REG` is real in FinReflectKG (11,193 nodes) but dropped by the
   analyzer's **top-20 entity cap**; `:METADATA` is genuinely absent. Direct
@@ -223,7 +273,7 @@ This is a POC to load that dataset into a managed ArangoDB deployment and evalua
 | G3 | Vertex-centric indexes on edges | Persistent indexes on `(_from, type, _toType)` and `(_to, type, _fromType)`; AQL profiles show index use on **direct edge-collection queries** (see §4.2 note) | **Done** (with refined finding) |
 | G4 | Repeatable, resumable ETL | Pipeline re-runnable end-to-end; idempotent (deterministic `_key`s, `onDuplicate` handling); single command per stage | **Done** — `scripts/rebuild_all.sh` |
 | G5 | Query-performance baseline | A benchmark suite of representative graph queries with recorded latencies (see §6) | **Done** — suite ([scripts/benchmark.py](../scripts/benchmark.py)) run across all three distributions; deterministic scanned-edge + explain-locality metrics recorded ([benchmark-report.md](benchmark-report.md)) |
-| G6 | NL-query readiness | Source-text chunks joinable from every edge; **Cypher→AQL / NL→Cypher via `arango-cypher-py`** (§4.6) + GraphRAG grounding | **Done (FinReflectKG-side)** — NL→Cypher **front-end** run ([scripts/nl2cypher_eval.py](../scripts/nl2cypher_eval.py)): **19/22 transpile, 9/22 execute, 0 `MAPPING_NOT_FOUND`** (vocabulary gap closed); hand-written Cypher path 14/22 · 7/22 ([scripts/cypher_eval.py](../scripts/cypher_eval.py)); GraphRAG grounding 24/24 + **answer synthesis 5/5** ([scripts/graphrag.py](../scripts/graphrag.py), [scripts/graphrag_rubric.py](../scripts/graphrag_rubric.py)); gold-set AQL runner 21/22. Remaining ceiling is upstream (transpiler bugs, non-VCI AQL efficiency, analyzer cap) — see [nl-graphrag.md](nl-graphrag.md) |
+| G6 | NL-query readiness | Source-text chunks joinable from every edge; **Cypher→AQL / NL→Cypher via `arango-cypher-py`** (§4.6) + GraphRAG grounding | **Done (FinReflectKG-side)** — NL→Cypher **front-end** run ([scripts/nl2cypher_eval.py](../scripts/nl2cypher_eval.py)): **19/22 transpile, 9/22 execute, 0 `MAPPING_NOT_FOUND`** (vocabulary gap closed); hand-written Cypher path 14/22 · 7/22 ([scripts/cypher_eval.py](../scripts/cypher_eval.py)); GraphRAG grounding 24/24 + **answer synthesis 4/5 (`openai/gpt-4o`, 2026-08-13; was 5/5 on `anthropic/claude-sonnet-4-5`, no longer reproducible)** ([scripts/graphrag.py](../scripts/graphrag.py), [scripts/graphrag_rubric.py](../scripts/graphrag_rubric.py)); gold-set AQL runner 21/22. Remaining ceiling is upstream (transpiler bugs, non-VCI AQL efficiency, analyzer cap) — see [nl-graphrag.md](nl-graphrag.md) |
 | G7 | Multiple distributions for comparative scale benchmarking | Same dataset built as a **OneShard** db (`FinReflectKgOneShard`) and a **sharded SmartGraph** db (`FinReflectKgSmart`) alongside the baseline `FinReflectKG`; sharding verified (see §4.5) | **Done** — OneShard and SmartGraph both built & verified ([multi-distribution-plan.md](multi-distribution-plan.md)) |
 | G8 | Graph analytics over the graph (GAE): centrality/PageRank, connected components (WCC/SCC), community detection — deterministic jobs + an agentic NL→insights layer | Reproducible GAE jobs on `Node`/`relations` with recorded results (non-mutating result collections), plus an NL/requirements→insights flow (see §4.7) | **Partial** — deterministic base **verified** ([scripts/analytics.py](../scripts/analytics.py)): PageRank + WCC end-to-end on all 3.1 M nodes (self-managed ACP GAE); agentic **planning** layer **completes** ([scripts/analytics_agentic.py](../scripts/analytics_agentic.py)): NL requirements → 10 GAE use cases. Remaining (optional): the fully-autonomous NL→execute→report loop |
 | G9 | **Time-travel (temporal) queries** — point-in-time as-of, current-state, and year-over-year diff over the 10 fiscal years | Numeric `validFrom`/`validTo` on `relations` + an MDI temporal index; as-of / current / diff queries return correct rows and are index-backed (MDI for unbounded, persistent composite for node-anchored — verified §4.8); built in `FinReflectKgTemporal` | **Done** — `FinReflectKgTemporal` (OneShard) built & validated: 17.51 M edges carry `validFrom`/`validTo`, as-of is MDI-backed (verified via `explain`), AAPL `operates_in` as-of 48/76/85 (2014/18/24) ([build_temporal.sh](../scripts/build_temporal.sh), [validate_temporal.py](../scripts/validate_temporal.py)) |
@@ -420,6 +470,26 @@ cache.
   chunk-grounding pipeline (`scripts/graphrag.py`) remains valid and orthogonal.
 - Details & status: [nl-graphrag.md](nl-graphrag.md).
 
+**LLM-dependent figures are provider-scoped.** This layer is deliberately
+provider-agnostic — the provider is chosen by `LLM_PROVIDER` with a key-based fallback
+([scripts/llm.py](../scripts/llm.py), [scripts/nl2cypher_eval.py](../scripts/nl2cypher_eval.py)) —
+so **every evaluation score below is only meaningful together with the provider and model
+that produced it**, and must be re-measured when `LLM_PROVIDER` changes. Current figures:
+
+| figure | provider / model | reproducible |
+|---|---|---|
+| NL→Cypher 19/22 transpile · 9/22 execute · 0 `MAPPING_NOT_FOUND` | `openai/gpt-4o-mini` | yes |
+| GraphRAG grounding 24/24 (59–60 of 60 facts carry source text) | n/a — retrieval only | yes |
+| GraphRAG answer synthesis **4/5** | `openai/gpt-4o` (2026-08-13) | yes |
+| GraphRAG answer synthesis 5/5 | `anthropic/claude-sonnet-4-5` | **no — key revoked** |
+
+The 5/5 → 4/5 change is **not a code regression**: retrieval and grounding are unchanged.
+Only the synthesis provider changed, and the PRD had never recorded which provider produced
+the figure — so a key rotation silently invalidated a published number. The single failure is
+a *false abstention* on "Who does Cincinnati Financial hold a stake in?" — 60 facts retrieved,
+all 60 grounded, citations valid, and the model declined to answer. The superseded record's
+metadata is preserved at `data/graphrag_rubric.PRIOR-anthropic.md`.
+
 ### 4.7 Graph analytics (GAE) — G8, deferred phase 2
 
 Run graph algorithms (PageRank / centrality, WCC / SCC, community detection /
@@ -481,9 +551,30 @@ mapped to algorithms (PageRank, WCC, label_propagation, betweenness, scc) — th
 but does **not** run the algorithms — GAE **execution** is the base layer above, which the
 plan's algorithms feed into (all 5 selected algorithms are supported by `analytics.py`).
 
-**Pending (optional):** the fully-autonomous NL→execute→report loop (the tool's
-`graph_analytics_ai/ai/agents/` mode, or glue that feeds the agentic plan into
-`analytics.py`), and running the base across the OneShard/Smart distributions.
+**Reporting (wired 2026-08-19, v0.20).** The package's report layer
+(`graph_analytics_ai.ai.reporting`) generates insights, recommendations and **interactive
+Plotly charts** from stored `gae_*` result collections via
+[scripts/analytics_report.py](../scripts/analytics_report.py). That script exists because the
+package's two halves do not meet: `GAEOrchestrator.run_analysis()` returns an
+`AnalysisResult`, while `ReportGenerator.generate_report()` expects an `ExecutionResult`
+wrapping an `AnalysisJob` — **no adapter ships with the package**, which is why the report
+layer had never once run here. It reports on results that already exist: no engine is
+deployed and no analysis re-run. Verified on `gae_pr_2024` → 88 KB HTML, 3 Plotly charts
+(top influencers, rank distribution, cumulative), 3 insights, 3 recommendations.
+
+Two caveats worth keeping in the PRD, because each one alone hid this capability for weeks:
+**(1)** charts sit behind an *optional* plotly import — absent it, `reporting/__init__.py`
+sets `_charts_available = False` and emits one `WARNING:root:` line, yielding a silently
+chartless report; `analytics_report.py` therefore asserts `is_plotly_available()` and fails
+loudly. **(2)** output is **HTML on disk**, not the platform's `aga_report_*` collections
+(`aga_report_manifests` / `aga_report_sections` / `aga_chart_specs` remain 0). The generated
+HTML loads plotly.js from a CDN, so it renders in a browser but not inside a CSP-restricted
+embed.
+
+**Pending (optional):** the **autonomous chaining** only — NL plan → GAE execute → report in
+one flow (the tool's `graph_analytics_ai/ai/agents/` mode, or glue that feeds the agentic plan
+into `analytics.py`); the report step above runs standalone on already-computed results. Also
+pending: running the base across the OneShard/Smart distributions.
 
 ### 4.8 Time-travel (temporal) layer — G9
 
@@ -581,7 +672,42 @@ doubles as type filters**; and a **Top-N PageRank slider** that restricts the vi
 globally-influential entities. Endpoints:
 `/api/{years,tickers,asof,timeline,influence,prranks,diff,backward}`. Deliverables:
 [demo/api.py](../demo/api.py), `demo/static/*`, [demo/screenshot.sh](../demo/screenshot.sh); run
-`uvicorn demo.api:app`. **Status: built (v1.3, v0.19).**
+`uvicorn demo.api:app`.
+
+**Presentation (v1.4).** The demo uses the **ArangoDB brand palette adopted verbatim from the
+r2g Studio** (`r2g/src/r2g/ui/static/index.html`) as CSS custom properties — including
+`--arango-green #006532` and `--green #2fa86b` — with **light/dark theming on the same contract
+as r2g**: light default, dark opt-in via `<html data-theme="dark">`, a header toggle showing the
+icon for the mode you would switch *to*, persisted in `localStorage`, and resolved **pre-paint**
+so there is no flash of the wrong theme. This is a deliberate cross-project consistency decision,
+not a local style choice: the two UIs share one palette and one theme contract. Because
+**Cytoscape bakes its stylesheet at construction**, the graph canvas cannot inherit CSS — so
+`graphStyle()` reads the tokens via `getComputedStyle` and `applyTheme()` re-applies them with
+`cy.style().fromJson(…).update()`, keeping canvas and chrome in step. Node marks carry a
+**surface-coloured ring** and a raised minimum size (leaf floor 14→17 px, `arrow-scale` 0.7→0.55,
+explicit `z-index` above edges) so a node always reads distinctly against its own edge, the
+arrowhead, and neighbouring labels in both themes — the light-mode edge colour is also stepped
+away from the default grey node hue.
+
+**Visibility, selection and filter semantics (v1.5).** Three defects that all presented as
+"the graph is wrong" had distinct causes, and the guard for the first was itself faulty.
+(a) **Off-edge rendering** — Cytoscape resolves same-property conflicts by rule order, so the
+`.off` rule must sort **after** the base `edge` rule or a hidden edge keeps painting at
+`opacity: 0.75` while its node vanishes. Guarded by two counters in the header, because class
+state and resolved style are different questions: `modelOrphans` (an edge we mean to show whose
+endpoint is hidden) and `paintLeaks` (an edge we mean to hide that is still painted, read from
+`e.style('opacity')`). The v1.4 counter tested only the former and so read 0 while the bug was
+live. (b) **Depth ≥ 2 selection** — a company node is incident to ~99 % of its own
+neighbourhood, so star and context edges are budgeted **separately** and each context edge is
+taken with the shortest path anchoring it to the company, or the connected-component filter
+strips it; both selection queries carry a deterministic `SORT e._key` so the rendered picture is
+reproducible. `/api/asof` and `/api/timeline` share one selector. (c) **The Top-N PageRank filter
+ranks corpus-wide**, not within the company, so it is labelled `global PageRank top N — X of Y
+here` (for `aapl` 2018, top-200 keeps 20 of 219). Theme default is **light unconditionally** —
+the OS `prefers-color-scheme` fallback is deliberately not consulted.
+Deliverables: `demo/static/{index.html,style.css,app.js}`, [demo/api.py](../demo/api.py).
+
+**Status: built (v1.5, v0.21).**
 
 ## 5. Sizing (from data analysis)
 
@@ -630,7 +756,7 @@ Note: latency on the shared remote cluster is noisy (a single query has ranged
 | M2 | Download + preprocess pipeline producing JSONL | local, repeatable | Done |
 | M3 | Bulk load into remote ArangoDB + indexes + reconciliation report | G1–G4 | **Done** ([load-report.md](load-report.md)) |
 | M4 | Benchmark suite + results | G5 (+ G7 cross-distribution) | **Done** — cross-distribution suite + results ([benchmark-report.md](benchmark-report.md)); SmartGraph decomposes the `net income` supernode ~250× on per-company queries; latency indicative on the shared cluster |
-| M5 | NL-query evaluation (Cypher→AQL / NL→Cypher via `arango-cypher-py` + GraphRAG) | G6, §4.6 | **Done (FinReflectKG-side)** — schema-aware **NL→Cypher front-end** run ([scripts/nl2cypher_eval.py](../scripts/nl2cypher_eval.py)): **19/22 transpile · 9/22 execute · 0 `MAPPING_NOT_FOUND`** (vs 14/22 · 7/22 for hand-written Cypher, [scripts/cypher_eval.py](../scripts/cypher_eval.py)). **GraphRAG answer synthesis 5/5** ([scripts/graphrag_rubric.py](../scripts/graphrag_rubric.py)). Root-caused the gold-set vocabulary mismatch against live data (sibling-schema rename `:RISK`→`RISK_FACTOR`; `ORG_REG` real but capped out of the top-20 ontology; `:METADATA` absent). Remaining upstream: transpiler ERR 1511 (multi-`WITH`), non-VCI AQL efficiency, analyzer entity cap, `reduce()` ([nl-graphrag.md](nl-graphrag.md)) |
+| M5 | NL-query evaluation (Cypher→AQL / NL→Cypher via `arango-cypher-py` + GraphRAG) | G6, §4.6 | **Done (FinReflectKG-side)** — schema-aware **NL→Cypher front-end** run ([scripts/nl2cypher_eval.py](../scripts/nl2cypher_eval.py)): **19/22 transpile · 9/22 execute · 0 `MAPPING_NOT_FOUND`** (vs 14/22 · 7/22 for hand-written Cypher, [scripts/cypher_eval.py](../scripts/cypher_eval.py)). **GraphRAG answer synthesis 4/5** (`openai/gpt-4o`, 2026-08-13; the one failure is a false abstention on the CINF stake question — 60 facts retrieved, all grounded, citations valid, model declined to answer. Was 5/5 on `anthropic/claude-sonnet-4-5`, no longer reproducible: that key is revoked) ([scripts/graphrag_rubric.py](../scripts/graphrag_rubric.py)). Root-caused the gold-set vocabulary mismatch against live data (sibling-schema rename `:RISK`→`RISK_FACTOR`; `ORG_REG` real but capped out of the top-20 ontology; `:METADATA` absent). Remaining upstream: transpiler ERR 1511 (multi-`WITH`), non-VCI AQL efficiency, analyzer entity cap, `reduce()` ([nl-graphrag.md](nl-graphrag.md)) |
 | M6 | Multi-distribution builds (OneShard + SmartGraph) | G7 | **Done** — OneShard and SmartGraph both built & verified ([multi-distribution-plan.md](multi-distribution-plan.md)) |
 | M7 | Graph analytics via GAE (deterministic jobs + agentic NL→insights) | G8, §4.7 | **Partial** — base verified (PageRank + WCC on 3.1 M nodes, [scripts/analytics.py](../scripts/analytics.py)); agentic planning completes (NL → 10 use cases, [scripts/analytics_agentic.py](../scripts/analytics_agentic.py)); autonomous execute→report loop optional/pending |
 | M8 | Time-travel layer (`FinReflectKgTemporal`, OneShard) | G9, §4.8 | **Done** — built via [scripts/build_temporal.sh](../scripts/build_temporal.sh) (augment → OneShard import → MDI + composite VCIs → graph → validate); 17,513,372 edges, validation green. Includes a data-quality clamp on OCR-noisy start years (§4.8) |
