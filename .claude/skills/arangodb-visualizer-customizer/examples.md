@@ -1,310 +1,242 @@
-## Ready-to-copy Python installer skeleton
+## Ready-to-copy Python installer skeleton (themes + saved queries + canvas actions)
 
-Idempotent installer for all Graph Visualizer assets: themes, canvas actions, saved queries (both editor sidebar and Visualizer Queries panel).
+This is a minimal, **idempotent** installer pattern for ArangoDB Graph Visualizer assets.
 
-**Default**: all metadata (saved queries, canvas actions) goes into the **target DB**. This is correct for ArangoGraph managed / cloud deployments. For self-hosted ArangoDB with shared saved queries, pass `meta_db=sys_db`.
+It supports the common split:
+- **Themes** in the **target DB** (`_graphThemeStore`)
+- **Saved queries** + **canvas actions** in **`_system`** by default (`_editor_saved_queries`, `_canvasActions`)
+- **Viewpoint links** in the **target DB** (`_viewpointActions` edges from `_viewpoints/*` → `_canvasActions/*`)
 
-### Helper functions
+### Copy/paste skeleton
 
 ```python
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import copy
 import json
-import re
-from datetime import datetime
+import os
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional, Set
+from typing import Any, Optional
 
 from arango import ArangoClient
 
 
 def now_iso() -> str:
-    return datetime.utcnow().isoformat() + "Z"
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def get_db(
+    *,
+    endpoint: str,
+    username: str,
+    password: str,
+    database: str,
+):
+    client = ArangoClient(hosts=endpoint)
+    return client.db(database, username=username, password=password)
 
 
 def ensure_collection(db, name: str, *, edge: bool = False) -> None:
-    if not db.has_collection(name):
-        db.create_collection(name, edge=edge, system=name.startswith("_"))
+    if db.has_collection(name):
+        return
+    db.create_collection(name, edge=edge, system=name.startswith("_"))
 
 
-def _slugify(s: str) -> str:
-    """Derive a stable document _key from a human-readable string."""
-    return re.sub(r"[^a-z0-9]+", "_", s.lower()).strip("_")
-
-
-def get_graph_schema(db, graph_name: str, exclude_vertex: Set[str] = None):
-    """Return (vertex_colls, edge_colls) or (None, None) if graph not found.
-
-    Uses g.edge_definitions() (python-arango SDK) which returns dicts with
-    key 'edge_collection'. Do NOT mix with AQL on _graphs — that returns 'collection'.
+def upsert_by_fields(col, match_fields: dict[str, Any], doc: dict[str, Any]) -> str:
     """
-    if not db.has_graph(graph_name):
-        return None, None
-    g = db.graph(graph_name)
-    vertex_colls = set(g.vertex_collections())
-    edge_colls = set(ed["edge_collection"] for ed in g.edge_definitions())
-    if exclude_vertex:
-        vertex_colls -= exclude_vertex
-    return vertex_colls, edge_colls
+    Upsert using a field match (not AQL).
+    Returns the document _id.
+
+    Notes:
+    - Prefer stable `_key` where possible.
+    - When matching on fields, ensure they uniquely identify the asset.
+    """
+    existing = list(col.find(match_fields))
+    if existing:
+        key = existing[0]["_key"]
+        doc = {**doc, "_key": key, "createdAt": existing[0].get("createdAt", doc.get("createdAt"))}
+        col.replace(doc, check_rev=False)
+        return f"{col.name}/{key}"
+    res = col.insert(doc)
+    return res["_id"]
 
 
-# ---------------------------------------------------------------------------
-# Viewpoints
-# ---------------------------------------------------------------------------
+def upsert_by_key(col, key: str, doc: dict[str, Any]) -> str:
+    doc = {**doc, "_key": key}
+    if col.has(key):
+        existing = col.get(key)
+        doc["createdAt"] = existing.get("createdAt", doc.get("createdAt"))
+        col.replace(doc, check_rev=False)
+        return f"{col.name}/{key}"
+    res = col.insert(doc)
+    return res["_id"]
+
 
 def ensure_default_viewpoint(db, graph_name: str) -> str:
-    """Return _id of the Default viewpoint, creating it programmatically if absent."""
+    """
+    Create a default viewpoint programmatically so the graph can be automated
+    without requiring the user to open it in the UI first.
+    """
     ensure_collection(db, "_viewpoints")
     vp_col = db.collection("_viewpoints")
-    for query in [{"graphId": graph_name, "name": "Default"}, {"graphId": graph_name}]:
-        existing = list(vp_col.find(query))
-        if existing:
-            return existing[0]["_id"]
+    existing = list(vp_col.find({"graphId": graph_name, "name": "Default"}))
+    if existing:
+        return existing[0]["_id"]
     now = now_iso()
     res = vp_col.insert({
-        "graphId": graph_name, "name": "Default",
+        "graphId": graph_name,
+        "name": "Default",
         "description": f"Default viewpoint for {graph_name}",
-        "createdAt": now, "updatedAt": now,
+        "createdAt": now,
+        "updatedAt": now,
     })
     return res["_id"]
 
 
-# ---------------------------------------------------------------------------
-# Themes
-# ---------------------------------------------------------------------------
-
-def prune_theme(theme_raw: dict, vertex_colls: Set[str], edge_colls: Set[str]) -> dict:
-    theme = copy.deepcopy(theme_raw)
-    if "nodeConfigMap" in theme:
-        theme["nodeConfigMap"] = {k: v for k, v in theme["nodeConfigMap"].items() if k in vertex_colls}
-    if "edgeConfigMap" in theme:
-        theme["edgeConfigMap"] = {k: v for k, v in theme["edgeConfigMap"].items() if k in edge_colls}
-    return theme
-
-
-def ensure_visualizer_shape(theme: dict) -> None:
-    for node_cfg in theme.get("nodeConfigMap", {}).values():
-        node_cfg.setdefault("rules", [])
-        node_cfg.setdefault("hoverInfoAttributes", [])
-    for edge_cfg in theme.get("edgeConfigMap", {}).values():
-        edge_cfg.setdefault("rules", [])
-        edge_cfg.setdefault("hoverInfoAttributes", [])
-        edge_cfg.setdefault("arrowStyle", {"sourceArrowShape": "none", "targetArrowShape": "triangle"})
-        edge_cfg.setdefault("labelStyle", {"color": "#1d2531"})
-
-
-def install_theme(db, graph_name: str, theme_raw: dict, *, is_default: bool = True) -> str:
-    """Upsert a theme. Preserves createdAt on update. Returns the theme _id."""
-    ensure_collection(db, "_graphThemeStore")
-    col = db.collection("_graphThemeStore")
-
-    vertex_colls, edge_colls = get_graph_schema(db, graph_name)
-    if vertex_colls is None:
-        raise ValueError(f"Graph '{graph_name}' not found")
-
-    theme = prune_theme(theme_raw, vertex_colls, edge_colls)
-    theme["graphId"] = graph_name
-    theme["isDefault"] = is_default
-    theme["updatedAt"] = now_iso()
-    ensure_visualizer_shape(theme)
-
-    existing = list(col.find({"name": theme["name"], "graphId": graph_name}))
+def ensure_action_link(target_db, *, viewpoint_id: str, action_id: str) -> None:
+    ensure_collection(target_db, "_viewpointActions", edge=True)
+    edge_col = target_db.collection("_viewpointActions")
+    existing = list(edge_col.find({"_from": viewpoint_id, "_to": action_id}))
     if existing:
-        theme["_key"] = existing[0]["_key"]
-        theme["_id"] = existing[0]["_id"]
-        theme["createdAt"] = existing[0].get("createdAt", theme["updatedAt"])
-        col.replace(theme, check_rev=False)
-        return existing[0]["_id"]
-    else:
-        theme["createdAt"] = theme["updatedAt"]
-        return col.insert(theme)["_id"]
-
-
-# ---------------------------------------------------------------------------
-# Canvas actions
-# ---------------------------------------------------------------------------
-
-def _upsert_canvas_action(canvas_col, vp_act_col, vp_id: str, graph_name: str,
-                           name: str, description: str, query_text: str,
-                           bind_vars: dict, now: str) -> str:
-    existing = sorted(canvas_col.find({"name": name, "graphId": graph_name}),
-                      key=lambda d: d.get("_key", ""))
-    if existing:
-        for orphan in existing[1:]:  # dedup orphans from before stable keys
-            for e in vp_act_col.find({"_to": orphan["_id"]}):
-                vp_act_col.delete(e["_key"])
-            canvas_col.delete(orphan["_key"])
-        doc = {
-            "_key": existing[0]["_key"], "_id": existing[0]["_id"],
-            "graphId": graph_name, "name": name, "description": description,
-            "queryText": query_text, "bindVariables": bind_vars,
-            "createdAt": existing[0].get("createdAt", now), "updatedAt": now,
-        }
-        canvas_col.replace(doc, check_rev=False)
-        action_id = existing[0]["_id"]
-    else:
-        doc = {
-            "_key": _slugify(f"{graph_name}_{name}"),
-            "graphId": graph_name, "name": name, "description": description,
-            "queryText": query_text, "bindVariables": bind_vars,
-            "createdAt": now, "updatedAt": now,
-        }
-        action_id = canvas_col.insert(doc)["_id"]
-
-    if not list(vp_act_col.find({"_from": vp_id, "_to": action_id})):
-        vp_act_col.insert({"_from": vp_id, "_to": action_id, "createdAt": now, "updatedAt": now})
-    return action_id
-
-
-def install_canvas_actions(db, graph_name: str, exclude_vertex: Set[str] = None) -> None:
-    """Install schema-driven canvas actions: 2-hop explorer + per-collection expand."""
-    ensure_collection(db, "_canvasActions")
-    ensure_collection(db, "_viewpointActions", edge=True)  # never assume auto-creation
-
-    canvas_col = db.collection("_canvasActions")
-    vp_act_col = db.collection("_viewpointActions")
-    vp_id = ensure_default_viewpoint(db, graph_name)
-    vertex_colls, edge_colls = get_graph_schema(db, graph_name, exclude_vertex=exclude_vertex)
-    if vertex_colls is None:
         return
-
-    edge_list_str = ", ".join(sorted(edge_colls))
-    with_clause = "WITH " + ", ".join(sorted(vertex_colls | edge_colls))
-    now = now_iso()
-
-    # General 2-hop explorer — RETURN e (edges; Visualizer resolves vertices)
-    _upsert_canvas_action(
-        canvas_col, vp_act_col, vp_id, graph_name,
-        "Find 2-hop neighbors",
-        "Expand 2 hops in any direction from selected nodes",
-        f"""{with_clause}
-FOR node IN @nodes
-  FOR v, e IN 1..2 ANY node GRAPH "{graph_name}"
-  LIMIT 100
-  RETURN e""",
-        {"nodes": []}, now,
-    )
-
-    # Per-collection 1-hop expand — RETURN p (full path including start node)
-    for v_coll in sorted(vertex_colls):
-        _upsert_canvas_action(
-            canvas_col, vp_act_col, vp_id, graph_name,
-            f"[{v_coll}] Expand Relationships",
-            f"1-hop expand for {v_coll} nodes",
-            f"""{with_clause}
-FOR node IN @nodes
-  FILTER IS_SAME_COLLECTION("{v_coll}", node)
-  FOR v, e, p IN 1..1 ANY node {edge_list_str}
-  LIMIT 20
-  RETURN p""",
-            {"nodes": []}, now,
-        )
+    edge_col.insert({"_from": viewpoint_id, "_to": action_id, "createdAt": now_iso()})
 
 
-# ---------------------------------------------------------------------------
-# Saved queries — editor sidebar (_editor_saved_queries)
-# ---------------------------------------------------------------------------
+def install_theme(target_db, *, graph_id: str, theme_path: Path) -> str:
+    ensure_collection(target_db, "_graphThemeStore")
+    col = target_db.collection("_graphThemeStore")
 
-def install_editor_saved_query(db, key: str, name: str, aql: str, database_name: str) -> str:
-    """Upsert into _editor_saved_queries. Sets both content AND value for cross-version compat."""
-    ensure_collection(db, "_editor_saved_queries")
-    col = db.collection("_editor_saved_queries")
-    now = now_iso()
-    doc = {
-        "_key": key, "name": name, "title": name,
-        "content": aql,   # newer ArangoDB UI versions
-        "value": aql,     # older ArangoDB UI versions
-        "bindVariables": {}, "databaseName": database_name,
-        "updatedAt": now,
-    }
-    if col.has(key):
-        existing = col.get(key)
-        doc["createdAt"] = existing.get("createdAt", now)
-        col.replace(doc, check_rev=False)
-    else:
-        doc["createdAt"] = now
-        col.insert(doc)
-    return f"_editor_saved_queries/{key}"
+    theme = json.loads(theme_path.read_text(encoding="utf-8"))
+    theme["graphId"] = theme.get("graphId") or graph_id
+    theme.setdefault("name", "custom-theme")
+    theme.setdefault("description", "")
+    theme.setdefault("nodeConfigMap", {})
+    theme.setdefault("edgeConfigMap", {})
+    theme.setdefault("isDefault", True)
+
+    ts = now_iso()
+    theme["updatedAt"] = ts
+
+    # Upsert by (graphId, name) — preserves createdAt on update
+    return upsert_by_fields(col, {"graphId": theme["graphId"], "name": theme["name"]}, theme)
 
 
-# ---------------------------------------------------------------------------
-# Saved queries — Graph Visualizer Queries panel (_queries + _viewpointQueries)
-# ---------------------------------------------------------------------------
+def install_saved_queries(
+    queries_db,
+    *,
+    queries: list[dict[str, Any]],
+    database_name: Optional[str] = None,
+) -> int:
+    ensure_collection(queries_db, "_editor_saved_queries")
+    col = queries_db.collection("_editor_saved_queries")
+    ts = now_iso()
 
-def install_visualizer_query(db, graph_name: str, key: str, name: str, aql: str) -> str:
-    """Upsert into _queries and link via _viewpointQueries for the Visualizer panel."""
-    ensure_collection(db, "_queries")
-    ensure_collection(db, "_viewpointQueries", edge=True)  # never assume auto-creation
+    processed = 0
+    for q in queries:
+        # Normalize display fields
+        if "title" not in q and "name" in q:
+            q["title"] = q["name"]
+        q.setdefault("name", q.get("title") or "Untitled query")
+        # CRITICAL: The query editor reads `content` (and `value` for older versions),
+        # NOT `queryText`. `queryText` is only for canvas actions.
+        aql = q.pop("queryText", None)
+        q.setdefault("content", aql or "")
+        q.setdefault("value", q["content"])  # cross-version compatibility
+        q.setdefault("bindVariables", {})
+        q["updatedAt"] = ts
+        q.setdefault("createdAt", ts)
+        if database_name:
+            q.setdefault("databaseName", database_name)
 
-    col = db.collection("_queries")
-    vp_q_col = db.collection("_viewpointQueries")
-    vp_id = ensure_default_viewpoint(db, graph_name)
-    now = now_iso()
-
-    doc = {
-        "_key": key, "name": name, "title": name,
-        "graphId": graph_name,
-        "queryText": aql,   # _queries uses queryText (not content/value)
-        "bindVariables": {}, "updatedAt": now,
-    }
-    if col.has(key):
-        existing = col.get(key)
-        doc["createdAt"] = existing.get("createdAt", now)
-        col.replace(doc, check_rev=False)
-        query_id = f"_queries/{key}"
-    else:
-        doc["createdAt"] = now
-        query_id = col.insert(doc)["_id"]
-
-    if not list(vp_q_col.find({"_from": vp_id, "_to": query_id})):
-        vp_q_col.insert({"_from": vp_id, "_to": query_id, "createdAt": now, "updatedAt": now})
-    return query_id
+        key = q.get("_key")
+        if key:
+            upsert_by_key(col, key, q)
+        else:
+            upsert_by_fields(col, {"title": q["title"]}, q)
+        processed += 1
+    return processed
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
+def install_canvas_actions(
+    actions_db,
+    target_db,
+    *,
+    graph_id: str,
+    actions: list[dict[str, Any]],
+) -> int:
+    ensure_collection(actions_db, "_canvasActions")
+    action_col = actions_db.collection("_canvasActions")
+
+    viewpoint_id = ensure_default_viewpoint(target_db, graph_id)
+
+    processed = 0
+    for a in actions:
+        # Normalize
+        a.setdefault("graphId", graph_id)
+        if "title" in a and "name" not in a:
+            a["name"] = a["title"]
+        a.setdefault("title", a.get("name") or "Canvas action")
+        a.setdefault("name", a["title"])
+        a.setdefault("queryText", "")
+        a.setdefault("bindVariables", {"nodes": []})
+
+        key = a.get("_key")
+        if not key:
+            # Derive a stable key from graph_id + name (snake_case)
+            import re
+            slug = re.sub(r"[^a-z0-9]+", "_", f"{graph_id}_{a['name']}".lower()).strip("_")
+            key = slug
+
+        action_id = upsert_by_key(action_col, key, a)
+
+        # Link action to viewpoint in target DB so it appears in UI
+        ensure_action_link(target_db, viewpoint_id=viewpoint_id, action_id=action_id)
+        processed += 1
+    return processed
+
 
 def main() -> None:
-    import os
-    endpoint = os.environ["ARANGO_ENDPOINT"]
+    # ---- Configure ----
+    endpoint = os.environ["ARANGO_ENDPOINT"]  # e.g. https://cluster.arango.ai:8529
     username = os.environ.get("ARANGO_USERNAME", "root")
     password = os.environ.get("ARANGO_PASSWORD", "")
-    database = os.environ["ARANGO_DATABASE"]
+    target_database = os.environ["ARANGO_DATABASE"]
 
-    client = ArangoClient(hosts=endpoint)
-    db = client.db(database, username=username, password=password)
+    graph_id = os.environ.get("VIS_GRAPH_ID", "IC_Knowledge_Graph")
+    theme_path = Path(os.environ.get("VIS_THEME_JSON", "docs/theme.json"))
 
-    graph_name = os.environ.get("VIS_GRAPH_ID", "DataGraph")
-    theme_raw = json.loads(Path("docs/theme.json").read_text(encoding="utf-8"))
+    # Convention: store saved queries + actions in _system.
+    # If your deployment stores these in the target DB, set VIS_META_DB=target.
+    meta_db_mode = (os.environ.get("VIS_META_DB", "system") or "system").lower()
 
-    # Install theme (is_default=True makes it auto-apply when graph is opened)
-    install_theme(db, graph_name, theme_raw, is_default=True)
+    # Load assets (replace with your repo's JSON layout)
+    queries = json.loads(Path("docs/saved_queries.json").read_text(encoding="utf-8"))
+    actions = json.loads(Path("docs/canvas_actions.json").read_text(encoding="utf-8"))
 
-    # Install schema-driven canvas actions
-    install_canvas_actions(db, graph_name)
+    # ---- Connect ----
+    target_db = get_db(endpoint=endpoint, username=username, password=password, database=target_database)
+    sys_db = get_db(endpoint=endpoint, username=username, password=password, database="_system")
+    meta_db = target_db if meta_db_mode == "target" else sys_db
 
-    # Install starter query in global AQL editor sidebar
-    MY_QUERY = "FOR d IN Person LIMIT 10 RETURN d"
-    install_editor_saved_query(db, "starter_persons", "Starter: Persons", MY_QUERY, database)
+    # ---- Install ----
+    theme_id = install_theme(target_db, graph_id=graph_id, theme_path=theme_path)
+    q_count = install_saved_queries(meta_db, queries=queries, database_name=target_database)
+    a_count = install_canvas_actions(meta_db, target_db, graph_id=graph_id, actions=actions)
 
-    # Install same query in Graph Visualizer Queries panel
-    install_visualizer_query(db, graph_name, f"starter_persons_{_slugify(graph_name)}",
-                             "Starter: Persons", MY_QUERY)
-
-    print("Done. Refresh the Visualizer (theme in Legend; Queries panel; right-click actions).")
+    print(f"✓ Theme: {theme_id}")
+    print(f"✓ Saved queries: {q_count}")
+    print(f"✓ Canvas actions: {a_count}")
+    print("Done. Refresh the Visualizer UI (theme in Legend; queries panel; right-click actions).")
 
 
 if __name__ == "__main__":
     main()
 ```
 
-### Key decisions to adjust for your project
+### Notes you'll almost certainly need to adjust
 
-- **`graph_name`**: must match the ArangoDB graph name exactly.
-- **`is_default=True`**: set to `True` on the theme that should auto-apply; `False` for alternative themes.
-- **Rule order in theme JSON**: High → Low → Medium (narrowest bounds first, general-fallback last).
-- **`exclude_vertex`**: pass a set of collection names to skip (e.g. RDF artifacts like `OntologyGraph_UnknownResource`).
-- **Meta DB**: all helpers default to the target DB — correct for cloud. For self-hosted shared queries, pass `sys_db` instead.
+- **Asset loading**: replace `docs/saved_queries.json` and `docs/canvas_actions.json` with your repo's actual files (or embed lists inline).
+- **Graph ID**: set `VIS_GRAPH_ID` to the actual graph name in ArangoDB (must match what the Visualizer uses).
+- **Metadata DB**: if your environment stores `_editor_saved_queries` and `_canvasActions` in the target DB, set `VIS_META_DB=target`.
+- **Viewpoint**: created programmatically by `ensure_default_viewpoint()` — no manual UI step required.
