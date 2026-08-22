@@ -98,52 +98,27 @@ def asof(ticker: str, year: int, limit: int = 140, clean: bool = True, depth: in
                       rel:e.type}""",
             {"tk": ticker, "t": t, "lim": limit, "flagged": flagged, "focal": focal})
     else:
-        # depth>=2: pull the ticker's as-of edges once; derive total + focal + adjacency in Python,
-        # then reveal more of the neighborhood reachable from the company. Keep edges with BOTH
-        # endpoints within <depth> hops, take the flagged-first top (a bigger budget the deeper you
-        # go), then hard-filter to the focal's connected component so truncation can't strand an
-        # island. Done in Python because an `e._from IN keep` AQL filter would use the edge index to
-        # fetch those nodes' edges GLOBALLY, and neighbors include supernodes (net income ~60k) ->
-        # a full-graph blowup + timeout.
+        # depth>=2: pull the ticker's as-of edges once, derive total + focal in Python, then
+        # delegate the depth-bounded selection to _select_neighborhood (below) — the single
+        # source of truth. This endpoint previously carried its own copy of that logic, which
+        # meant the star-vs-context budget defect had to be fixed in two places and was only
+        # ever fixed in one. Done in Python because an `e._from IN keep` AQL filter would use
+        # the edge index to fetch those nodes' edges GLOBALLY, and neighbours include
+        # supernodes (net income ~60k) -> a full-graph blowup + timeout.
         flagged_set = set(flagged)
         triples = aql("""FOR e IN relations FILTER e.ticker==@tk AND e.validFrom<=@t AND e.validTo>@t
+                           SORT e._key
                            RETURN {f:e._from, t:e._to, rel:e.type}""", {"tk": ticker, "t": t})
         total = len(triples)
         if not triples:
             return {"ticker": ticker, "year": year, "clean": clean, "depth": depth,
                     "focal": None, "nodes": [], "edges": [], "shown": 0, "total": 0}
-        deg, adj = {}, {}
+        deg = {}
         for e in triples:
             deg[e["f"]] = deg.get(e["f"], 0) + 1
             deg[e["t"]] = deg.get(e["t"], 0) + 1
-            adj.setdefault(e["f"], set()).add(e["t"])
-            adj.setdefault(e["t"], set()).add(e["f"])
         focal = max(deg, key=deg.get)
-        keep, frontier = {focal}, {focal}
-        for _ in range(depth):
-            nxt = set()
-            for n in frontier:
-                nxt |= adj.get(n, set())
-            nxt -= keep
-            keep |= nxt
-            frontier = nxt
-            if len(keep) > 800:
-                break
-        fk = lambda e: 0 if (e["f"] in flagged_set or e["t"] in flagged_set) else 1
-        cand = sorted((e for e in triples if e["f"] in keep and e["t"] in keep), key=fk)
-        cand = cand[: limit + (depth - 1) * 60]           # deeper reveals more (the density knob)
-        # keep only what's reachable from the company over the chosen edges -> no truncation islands
-        nadj = {}
-        for e in cand:
-            nadj.setdefault(e["f"], set()).add(e["t"])
-            nadj.setdefault(e["t"], set()).add(e["f"])
-        reach, frontier = {focal}, [focal]
-        while frontier:
-            n = frontier.pop()
-            for m in nadj.get(n, ()):
-                if m not in reach:
-                    reach.add(m); frontier.append(m)
-        sel = [e for e in cand if e["f"] in reach and e["t"] in reach]
+        sel = _select_neighborhood(triples, focal, depth, limit, flagged_set)
         ids = list({e["f"] for e in sel} | {e["t"] for e in sel})
         docs = {}
         if ids:
@@ -196,7 +171,68 @@ def _select_neighborhood(ye, focal, depth, limit, flagged):
         frontier = nxt
         if len(keep) > 800:
             break
-    cand = sorted((e for e in ye if e["f"] in keep and e["t"] in keep), key=fk)[: limit + (depth - 1) * 60]
+    # Budget the star and the context SEPARATELY, and make context selection ANCHOR-AWARE.
+    # A company node is incident to ~99% of its own neighbourhood's edges (aapl 2021: 2,004
+    # of 2,024), so a blind slice spends the whole budget on the star and returns zero
+    # multi-hop edges — depth 2/3 then look identical to depth 1, just denser. Reserving a
+    # flat context quota is not enough either: the connected-component filter below then
+    # strips any context edge whose endpoints lost their path to focal when the star was
+    # trimmed. So each context edge is taken together with the shortest path that anchors it
+    # back to focal, which makes it survive that filter by construction.
+    ranked = sorted((e for e in ye if e["f"] in keep and e["t"] in keep), key=fk)
+    is_star = lambda e: e["f"] == focal or e["t"] == focal
+    star = [e for e in ranked if is_star(e)]
+    ctx = [e for e in ranked if not is_star(e)]
+    budget = limit + (depth - 1) * 60
+    ctx_allow = min(len(ctx), max(40, (depth - 1) * 60))
+
+    # BFS from focal over every candidate, recording the parent edge, so any kept node can
+    # walk a shortest path home. Works at any depth (a depth-3 context edge may be anchored
+    # through an intermediate hop, not directly to focal).
+    padj = {}
+    for e in ranked:
+        padj.setdefault(e["f"], []).append((e["t"], e))
+        padj.setdefault(e["t"], []).append((e["f"], e))
+    prev, fr = {focal: None}, [focal]
+    while fr:
+        nxt = []
+        for n in fr:
+            for m, e in padj.get(n, ()):
+                if m not in prev:
+                    prev[m] = (n, e); nxt.append(m)
+        fr = nxt
+
+    def path_home(n):
+        out = []
+        while prev.get(n):
+            p, e = prev[n]; out.append(e); n = p
+        return out
+
+    ekey = lambda e: (e["f"], e["rel"], e["t"])
+    cand, seen = [], set()
+
+    def take(e):
+        k = ekey(e)
+        if k in seen:
+            return
+        seen.add(k); cand.append(e)
+
+    ctx_used = 0
+    for e in ctx:
+        if ctx_used >= ctx_allow or len(cand) >= budget:
+            break
+        bundle = [e] + [pe for n in (e["f"], e["t"]) for pe in path_home(n)]
+        fresh = sum(1 for b in bundle if ekey(b) not in seen)
+        if len(cand) + fresh > budget:
+            continue                      # this bundle will not fit; try a cheaper one
+        for b in bundle:
+            take(b)
+        ctx_used += 1
+    for e in star:                        # fill the remainder with the star, flagged-first
+        if len(cand) >= budget:
+            break
+        take(e)
+
     nadj = {}
     for e in cand:
         nadj.setdefault(e["f"], set()).add(e["t"])
@@ -217,6 +253,7 @@ def timeline(ticker: str, depth: int = 1, clean: bool = True, axis: str = "valid
     mid-year); axis='reported' -> transaction-time (facts a filing asserted that year, e.year==Y)."""
     flagged = set(flagged_ids())
     edges = aql("""FOR e IN relations FILTER e.ticker==@tk
+                     SORT e._key
                      RETURN {f:e._from, t:e._to, rel:e.type, vf:e.validFrom, vt:e.validTo, yr:e.year}""",
                 {"tk": ticker}, timeout=120)
     if not edges:

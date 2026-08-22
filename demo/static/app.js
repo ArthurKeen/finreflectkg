@@ -26,34 +26,85 @@ let prOrder = {};                    // anchor year -> [node ids ranked by PageR
 let anchors = [2014, 2019, 2020, 2024];
 const infCache = {}, diffCache = {};
 
-function initCy() {
-  cy = cytoscape({
-    container: $('#cy'), wheelSensitivity: 0.3,
-    style: [
-      { selector: 'node', style: {
-        'background-color': 'data(color)', 'label': 'data(label)', 'color': '#cfd8e6',
-        'font-size': '9px', 'text-wrap': 'wrap', 'text-max-width': '84px',
-        'width': 'mapData(deg,1,25,14,46)', 'height': 'mapData(deg,1,25,14,46)',
-        'text-valign': 'bottom', 'text-margin-y': '2px', 'border-width': 0, 'min-zoomed-font-size': 6,
-        'transition-property': 'opacity, background-color, width, height', 'transition-duration': '260ms' } },
-      { selector: 'node.company', style: {
-        'background-color': '#ffffff', 'border-color': '#5b8def', 'border-width': 4,
-        'font-size': '15px', 'color': '#ffffff', 'font-weight': 'bold',
-        'width': 56, 'height': 56, 'z-index': 30, 'min-zoomed-font-size': 0 } },
-      { selector: 'node.bnode', style: {
-        'border-color': '#4ec98a', 'border-width': 2, 'border-style': 'dashed', 'shape': 'round-rectangle' } },
-      { selector: 'node.junk', style: {
-        'background-color': '#e46a6a', 'border-color': '#e46a6a', 'shape': 'diamond', 'opacity': 0.9 } },
-      { selector: '.off', style: { 'opacity': 0, 'events': 'no', 'text-opacity': 0 } },
-      { selector: 'edge', style: {
-        'width': 1, 'line-color': '#31405c', 'target-arrow-color': '#31405c',
-        'target-arrow-shape': 'triangle', 'arrow-scale': 0.7, 'curve-style': 'bezier',
-        'label': 'data(label)', 'font-size': '7px', 'color': '#576a82',
-        'text-rotation': 'autorotate', 'opacity': 0.8, 'min-zoomed-font-size': 7,
-        'transition-property': 'opacity, line-color', 'transition-duration': '260ms' } },
-    ],
-  });
+// Cytoscape bakes its stylesheet at init, so the graph's own colours have to be
+// read out of the CSS custom properties rather than hardcoded — otherwise the
+// canvas stays dark-themed while the chrome switches. graphStyle() is rebuilt and
+// re-applied on every theme change (see applyTheme below).
+const cssVar = (name, fallback) => {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+};
+
+function graphStyle() {
+  const label = cssVar('--graph-label', '#cfd8e6');
+  const edge = cssVar('--graph-edge', '#31405c');
+  const edgeLabel = cssVar('--graph-edge-label', '#576a82');
+  const accent = cssVar('--accent', '#5b8def');
+  const green = cssVar('--green', '#2fa86b');
+  const red = cssVar('--red', '#e46a6a');
+  return [
+    { selector: 'node', style: {
+      'background-color': 'data(color)', 'label': 'data(label)', 'color': label,
+      'font-size': '9px', 'text-wrap': 'wrap', 'text-max-width': '84px',
+      // Floor raised 14 -> 17: a degree-1 leaf was small enough to disappear under
+      // an arrowhead or a neighbour's label.
+      'width': 'mapData(deg,1,25,17,46)', 'height': 'mapData(deg,1,25,17,46)',
+      'text-valign': 'bottom', 'text-margin-y': '3px', 'min-zoomed-font-size': 6,
+      // Surface-coloured ring + explicit z-index so every node reads as a distinct
+      // mark above its own edge, the arrowhead, and any label behind it.
+      'border-width': 1.5, 'border-color': cssVar('--graph-node-ring', '#0f172a'),
+      'border-opacity': 1, 'z-index': 10,
+      'transition-property': 'opacity, background-color, width, height', 'transition-duration': '260ms' } },
+    { selector: 'node.company', style: {
+      'background-color': cssVar('--graph-company-fill', '#ffffff'),
+      'border-color': accent, 'border-width': 4,
+      'font-size': '15px', 'color': cssVar('--graph-company-label', '#ffffff'), 'font-weight': 'bold',
+      'width': 56, 'height': 56, 'z-index': 30, 'min-zoomed-font-size': 0 } },
+    { selector: 'node.bnode', style: {
+      'border-color': green, 'border-width': 2, 'border-style': 'dashed', 'shape': 'round-rectangle' } },
+    { selector: 'node.junk', style: {
+      'background-color': red, 'border-color': red, 'shape': 'diamond', 'opacity': 0.9 } },
+    { selector: 'edge', style: {
+      'width': 1, 'line-color': edge, 'target-arrow-color': edge,
+      // arrow-scale down from 0.7: the arrowhead was competing with the small
+      // target node for attention. z-index keeps edges under the node marks.
+      'target-arrow-shape': 'triangle', 'arrow-scale': 0.55, 'curve-style': 'bezier',
+      'label': 'data(label)', 'font-size': '7px', 'color': edgeLabel,
+      'text-rotation': 'autorotate', 'opacity': 0.75, 'min-zoomed-font-size': 7,
+      'z-index': 1,
+      'transition-property': 'opacity, line-color', 'transition-duration': '260ms' } },
+    // MUST BE LAST. Cytoscape resolves same-property conflicts by rule order, so a
+    // `.off` rule placed before `edge` loses its opacity:0 to the edge base opacity —
+    // which left hidden nodes' edges still painting, i.e. arrows into empty space.
+    { selector: '.off', style: {
+      'opacity': 0, 'events': 'no', 'text-opacity': 0,
+      // Belt-and-braces: zero the arrow explicitly so no later default can revive it.
+      'target-arrow-color': 'transparent', 'line-color': 'transparent' } },
+  ];
 }
+
+function initCy() {
+  cy = cytoscape({ container: $('#cy'), wheelSensitivity: 0.3, style: graphStyle() });
+}
+
+// ── Theme (light default + dark toggle; mirrors the r2g Studio control) ──
+function currentTheme() {
+  return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+}
+function applyTheme(theme) {
+  const t = theme === 'dark' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', t);
+  try { localStorage.setItem('finreflectkg.theme', t); } catch (e) { /* ignore */ }
+  const btn = document.getElementById('btn-theme');
+  if (btn) {
+    // Show the icon for the mode you'd switch TO.
+    btn.innerHTML = t === 'dark' ? '&#9728;' : '&#9790;'; // ☀ when dark, ☾ when light
+    btn.setAttribute('aria-label', t === 'dark' ? 'Switch to light theme' : 'Switch to dark theme');
+  }
+  // Re-read the tokens and repaint the canvas; keeps the graph in step with the chrome.
+  if (cy) cy.style().fromJson(graphStyle()).update();
+}
+function toggleTheme() { applyTheme(currentTheme() === 'dark' ? 'light' : 'dark'); }
 
 const nearestAnchor = (y) => anchors.reduce((a, b) => (Math.abs(b - y) < Math.abs(a - y) ? b : a), anchors[0]);
 
@@ -126,9 +177,44 @@ function renderYear() {
     });
   });
   const shown = cy.edges().not('.off').length;
+  // Diagnostic — an arrow into empty space has two possible causes and the first
+  // version of this check only caught one of them, so it read 0 while the bug was live.
+  //   modelOrphans:  an edge we intend to show whose endpoint is hidden/absent.
+  //   paintLeaks:    an edge we intend to HIDE that is still being painted, because a
+  //                  later stylesheet rule overrode `.off`'s opacity. This is the one
+  //                  that actually bit us, and it is only visible in the resolved style.
+  let modelOrphans = 0, paintLeaks = 0;
+  cy.edges().forEach((e) => {
+    const s = e.source(), t = e.target();
+    const endpointGone = s.empty() || t.empty() || s.hasClass('off') || t.hasClass('off');
+    if (!e.hasClass('off')) { if (endpointGone) modelOrphans++; }
+    else if (parseFloat(e.style('opacity')) > 0) paintLeaks++;
+  });
+  const orphanEdges = modelOrphans + paintLeaks;
+  // How many visible edges are genuine multi-hop (neither endpoint is the company)?
+  // That is the whole point of depth >= 2, so show it rather than leaving the user to
+  // squint at a star and wonder whether the Depth control did anything.
+  let ctxEdges = 0;
+  if (depth > 1) {
+    cy.edges().not('.off').forEach((e) => {
+      if (e.source().id() !== focalId && e.target().id() !== focalId) ctxEdges++;
+    });
+  }
+  // The PageRank filter ranks GLOBALLY, so "top 200" keeps only the handful of
+  // corpus-wide leaders that happen to sit in this company's neighbourhood. Show that
+  // survivor count, or the label reads as a promise of 200 nodes it never made.
+  const prkept = $('#prkept');
+  if (prkept) {
+    const vis = cy.nodes().not('.off').length;
+    prkept.textContent = prSet ? ` — ${vis} of ${ys.nodeIds.size} here` : '';
+  }
   const axisLbl = axis === 'valid' ? 'as of' : 'as reported';
-  $('#meta').textContent = `${shown} of ${ys.total.toLocaleString()} facts · depth ${depth} · ${axisLbl} ${year}` + (clean ? '' : ' · RAW');
-  window.__frkg = { focal: focalId, year, axis, depth, visNodes: cy.nodes().not('.off').length, visEdges: shown, prTopN };
+  $('#meta').textContent = `${shown} of ${ys.total.toLocaleString()} facts · depth ${depth}`
+    + (depth > 1 ? ` (${ctxEdges} context)` : '') + ` · ${axisLbl} ${year}`
+    + (clean ? '' : ' · RAW')
+    + (orphanEdges ? ` · ⚠ ${modelOrphans} orphan / ${paintLeaks} leaked` : '');
+  window.__frkg = { focal: focalId, year, axis, depth, visNodes: cy.nodes().not('.off').length,
+                    visEdges: shown, ctxEdges, modelOrphans, paintLeaks, orphanEdges, prTopN };
 }
 
 async function loadInfluence() {
@@ -179,6 +265,9 @@ function infCacheClear() { for (const k in diffCache) delete diffCache[k]; }
 
 (async function () {
   initCy();
+  // The pre-paint script in index.html already set data-theme; sync the button
+  // glyph and the canvas to whatever it resolved to.
+  applyTheme(currentTheme());
   const yrs = await j('/api/years');
   anchors = yrs.anchors || anchors;
   const yr = $('#year'); yr.min = yrs.min; yr.max = yrs.max;
@@ -203,7 +292,7 @@ function infCacheClear() { for (const k in diffCache) delete diffCache[k]; }
   $('#clean').addEventListener('change', (e) => { clean = e.target.checked; rebuild(); });
   $('#pr').addEventListener('input', (e) => {
     prTopN = +e.target.value;
-    $('#prlbl').textContent = prTopN ? prTopN : 'all';
+    $('#prlbl').textContent = prTopN ? `global PageRank top ${prTopN}` : 'all entities';
     scheduleRender();
   });
 

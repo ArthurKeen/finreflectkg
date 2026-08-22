@@ -4,6 +4,21 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>FinReflectKG · Time Travel</title>
+  <script>
+    // Resolve the theme before first paint to avoid a flash. LIGHT IS THE
+    // UNCONDITIONAL DEFAULT: only an explicit choice the user made here switches to
+    // dark. The OS preference is deliberately NOT consulted — a demo shown on a
+    // dark-mode laptop should still open light unless the presenter asked for dark.
+    (function () {
+      try {
+        var stored = localStorage.getItem('finreflectkg.theme');
+        document.documentElement.setAttribute(
+          'data-theme', stored === 'dark' ? 'dark' : 'light');
+      } catch (e) {
+        document.documentElement.setAttribute('data-theme', 'light');
+      }
+    })();
+  </script>
   <link rel="stylesheet" href="/style.css">
   <script src="/vendor/cytoscape.min.js"></script>
 </head>
@@ -36,6 +51,9 @@
       <input id="clean" type="checkbox" checked> <span>Cleaned</span>
     </label>
     <span id="meta" class="meta"></span>
+    <button class="btn" id="btn-theme" type="button" onclick="toggleTheme()"
+            aria-label="Toggle light or dark theme"
+            title="Switch between light and dark mode. Your choice is remembered on this device.">&#9790;</button>
   </header>
 
   <main>
@@ -43,8 +61,8 @@
     <aside>
       <section>
         <h2>Influence <small id="infhdr"></small></h2>
-        <label class="prctl" title="Restrict the graph to the top-N entities by global PageRank (this anchor year)">
-          <span>Graph filter: top <b id="prlbl">all</b> by PageRank</span>
+        <label class="prctl" title="Keeps only entities that rank in the GLOBAL top-N by PageRank across the whole corpus (at this anchor year) — not the top-N within this company. The global leaders are corpus-wide hubs like 'net income' and 'united state', so only a fraction of them appear in any one company's neighbourhood; the count shows how many survive here.">
+          <span>Graph filter: <b id="prlbl">all entities</b><span id="prkept" class="prkept"></span></span>
           <input id="pr" type="range" min="0" max="300" step="10" value="0">
         </label>
         <ol id="influence" class="rank"></ol>
