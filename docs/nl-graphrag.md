@@ -5,8 +5,11 @@ front-end** was run ([`scripts/nl2cypher_eval.py`](../scripts/nl2cypher_eval.py)
 **19/22 transpile, 9/22 execute**, and the vocabulary gap that capped the
 hand-written path is **gone — 0 `MAPPING_NOT_FOUND`** (CINF-stake queries that
 returned 0 rows against the foreign vocabulary now return 219). **GraphRAG answer
-synthesis** scored **5/5** on a rubric ([`scripts/graphrag_rubric.py`](../scripts/graphrag_rubric.py)),
-including a faithful abstention on an out-of-scope question. Root-caused the gold-set
+synthesis** scores **4/5** on a rubric ([`scripts/graphrag_rubric.py`](../scripts/graphrag_rubric.py))
+under `openai/gpt-4o` (2026-08-13), including a faithful abstention on an out-of-scope
+question. It scored 5/5 on `anthropic/claude-sonnet-4-5` in July; that key has since been
+revoked, so the 5/5 is **not reproducible** and 4/5 is the standing figure. The delta is a
+false abstention, not a retrieval regression — see the provider note below. Root-caused the gold-set
 vocabulary mismatch against **live data**: the gold Cypher was authored against a
 **sibling schema** (`:RISK` vs this graph's `RISK_FACTOR`), and `ORG_REG` is real in
 FinReflectKG (11,193 nodes) but dropped by the analyzer's **top-20 entity cap**. The
@@ -105,9 +108,10 @@ synthesize with the LLM).
   - Note: on the SmartGraph a company name resolves to many nodes (its own root plus
     duplicated references inside other companies' subgraphs); `resolve()` ranks the
     ticker-prefixed smart-key root (`aapl:…`) and ORG/COMP types first.
-- **GraphRAG answer synthesis (2026-07-22):** `scripts/graphrag_rubric.py` on
+- **GraphRAG answer synthesis (2026-07-22, superseded):** `scripts/graphrag_rubric.py` on
   `FinReflectKgSmart` with `anthropic:claude-sonnet-4-5` — **5/5 pass** over five
-  questions. Each in-scope answer linked its entity, retrieved 60 grounded facts
+  questions. *Historical: that key was revoked and the run is no longer reproducible.
+  The standing figure is the 2026-08-13 re-run below.* Each in-scope answer linked its entity, retrieved 60 grounded facts
   (59–60 with source text), produced a `[n]`-cited answer, and **every cited index was
   valid** (no hallucinated citations). Notable behaviours: on "Who does Cincinnati
   Financial hold a stake in?" the model correctly flagged the **inverted premise**
@@ -229,3 +233,21 @@ recorded). Remaining items are upstream `arango-cypher-py` / `arangodb-schema-an
 - **`reduce()` (#22)** — fix is in the git history but the regenerated parser isn't
   active in the installed tree.
 - Re-run both evals once these land.
+
+---
+
+## Provider note (2026-08-13) — why the rubric reads 4/5
+
+`scripts/llm.py` auto-detects a provider and preferred Anthropic whenever
+`ANTHROPIC_API_KEY` was set. That key is revoked (HTTP 401 on every model), so `.env` now
+pins `LLM_PROVIDER=openai` and the standing rubric run is `openai/gpt-4o`.
+
+| run | provider | rubric | reproducible |
+|---|---|---|---|
+| 2026-07-22 | `anthropic/claude-sonnet-4-5` | 5/5 | **no — key revoked** |
+| 2026-08-13 | `openai/gpt-4o` | **4/5** | yes |
+
+**The single failure is a false abstention, not a retrieval regression.** On the CINF stake
+question the pipeline linked the entity, retrieved 60 grounded facts (59–60 carrying source
+text) and emitted valid citations — the model then declined to answer from them. Entity
+linking, neighbourhood retrieval and chunk grounding are unchanged and still measure 24/24.

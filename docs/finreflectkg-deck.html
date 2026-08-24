@@ -194,6 +194,32 @@
   .footlink b{color:var(--ink)}
   .twocol{display:grid; grid-template-columns:1.15fr .85fr; gap:34px; align-items:start}
   @media (max-width:860px){ .twocol{grid-template-columns:1fr; gap:22px} }
+
+  /* ── Print / PDF ────────────────────────────────────────────────────────────
+     Without these the deck paginates arbitrarily: .slide is min-height:100vh with
+     no break rules, so slides split across pages. One slide -> one 16:9 page. */
+  @page { size: 1280px 720px; margin: 0; }
+  @media print {
+    html, body { background: #ffffff; }
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    /* Screen-only chrome: progress bar, top bar, nav and keyboard hint. */
+    .chrome, .progress, .navbar, .hint { display: none !important; }
+    .deck { scroll-snap-type: none; }
+    /* One slide -> one 16:9 page. Keeps the deck's own flex centring and type size;
+       overflow:hidden guards the densest slides against spilling a second page. */
+    .slide {
+      min-height: 0; height: 720px; width: 1280px;
+      padding: 56px 64px; margin: 0;
+      break-after: page; page-break-after: always;
+      break-inside: avoid; page-break-inside: avoid;
+      overflow: hidden;
+    }
+    .slide:last-of-type { break-after: auto; page-break-after: auto; }
+    .inner { width: 100%; max-width: 1152px; }
+    /* Reveal-on-scroll never fires in a headless print — force everything visible. */
+    .reveal, [class*="reveal"] { opacity: 1 !important; transform: none !important; }
+    a { text-decoration: none; color: inherit; }
+  }
 </style>
 
 <div class="progress" id="progress"></div>
@@ -307,7 +333,7 @@
         <div class="card"><span class="tag">Deterministic base</span><p><b>PageRank + WCC</b> verified on the full graph — the influence and community backbone the rest of the analysis builds on.</p></div>
         <div class="card"><span class="tag">Agentic planning</span><p>A pipeline turns a natural-language goal into an analysis plan, runs it on GAE, and writes a report — validated across <b>10 use cases</b>.</p></div>
       </div>
-      <p class="footlink" style="margin-top:20px">Remaining (optional, REQ-011): closing the loop into fully-autonomous NL → execute → report.</p>
+      <p class="footlink" style="margin-top:20px">The <b>report stage is wired</b> — the tool’s own generator renders Plotly HTML from stored GAE results (<code>scripts/analytics_report.py</code>). Remaining (optional, REQ-011): closing the loop into <b>fully-autonomous</b> NL → execute → report.</p>
     </div>
   </section>
 
@@ -445,7 +471,7 @@
           <div class="h" style="color:var(--accent)">→ Next</div>
           <ul class="clean" style="margin-top:2px">
             <li>Fold <code>validFrom</code>/<code>validTo</code> into shared ETL so <b>all three distributions</b> inherit time-travel — then benchmark it (the G7 lens)</li>
-            <li>Close the <b>fully-autonomous</b> NL→execute→report loop (REQ-011)</li>
+            <li>Close the <b>fully-autonomous</b> NL→execute→report loop (REQ-011) — the report stage now exists; what remains is the agent driving it end to end</li>
             <li>Capture a time-slider <b>animation</b> for the deck</li>
           </ul>
         </div>
