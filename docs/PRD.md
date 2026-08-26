@@ -1,6 +1,6 @@
 # PRD — FinReflectKG on ArangoDB (Proof of Concept)
 
-**Status:** Draft v0.21 · 2026-08-21 (G9-P5 demo v1.5 — off-edge render fix, real multi-hop context at depth ≥ 2, corpus-wide PageRank filter relabelled, light-default theme; corrects v0.20's account of the off-edge defect)
+**Status:** Draft v0.22 · 2026-08-26 (BYOC packaging of the demo UI scoped — G10/§4.9: port-8000 root-path container, prefix-stripping route, JWT pass-through auth; applies to `gdelt-market-impact` too)
 **Authors:** Arthur Keen (ArangoDB)
 **Related docs:** [data-analysis.md](data-analysis.md) · [etl-plan.md](etl-plan.md) ·
 [load-report.md](load-report.md) · [sharding-analysis.md](sharding-analysis.md) ·
@@ -11,6 +11,27 @@
 
 ## 0. Changelog
 
+- **v0.22 (2026-08-26):** **BYOC packaging of the demo UI scoped (new G10 / §4.9).** The
+  platform can host the G9-P5 visualizer as a **platform service**; the runtime contract was
+  established from [arangodb/servicemaker](https://github.com/arangodb/servicemaker) (the
+  packaging tool, its Helm chart and its reference service) rather than the announcement post,
+  which omits it. Three findings drive the work. **(1) The container contract is small** — HTTP
+  on **port 8000** at the **root path**, any image; `servicemaker` derives from
+  `arangodb/py12base:latest` (Python 3.12, uv venv, entrypoint a Python script). **(2) Routing
+  strips the prefix** — the `ArangoRoute` publishes at `/_services/<name>/` with destination
+  `path: "/"`, so the service sees clean paths but the browser does not: every absolute URL in
+  the frontend (`/app.js`, `/api/…`) misses the prefix and 404s, so they must all become
+  relative. **(3) Credentials are never stored** — the route sets
+  `authentication: {type: required, passMode: pass}`, so envoy authenticates and passes the
+  caller's JWT through; the service reads `ARANGO_DEPLOYMENT_ENDPOINT` and connects with
+  `auth_method="jwt", user_token=<caller token>`. That **inverts** our model (one root
+  credential in `.env`, every query as root) and is strictly better — no password in the image
+  and queries respect the caller's own permissions — but it is a data-path refactor, since
+  [scripts/arango.py](../scripts/arango.py) binds credentials at module scope and signs with
+  Basic auth. The demo already meets the root-path and no-CDN requirements (Cytoscape is
+  vendored); the gaps are port/entrypoint, relative URLs and JWT pass-through. The same design
+  applies to `gdelt-market-impact`'s what-if UI, which is already BYOC-shaped (port 8000, root
+  path, vendored assets). Designed, not built.
 - **v0.21 (2026-08-21):** **Demo v1.5 — three G9-P5 defects fixed, one of them a correction to
   v0.20's own account.** **(1) Edges rendered without nodes.** Not mark separation, as v0.20
   recorded: Cytoscape resolves same-property conflicts by *rule order*, and the `.off` rule sat
@@ -277,6 +298,7 @@ This is a POC to load that dataset into a managed ArangoDB deployment and evalua
 | G7 | Multiple distributions for comparative scale benchmarking | Same dataset built as a **OneShard** db (`FinReflectKgOneShard`) and a **sharded SmartGraph** db (`FinReflectKgSmart`) alongside the baseline `FinReflectKG`; sharding verified (see §4.5) | **Done** — OneShard and SmartGraph both built & verified ([multi-distribution-plan.md](multi-distribution-plan.md)) |
 | G8 | Graph analytics over the graph (GAE): centrality/PageRank, connected components (WCC/SCC), community detection — deterministic jobs + an agentic NL→insights layer | Reproducible GAE jobs on `Node`/`relations` with recorded results (non-mutating result collections), plus an NL/requirements→insights flow (see §4.7) | **Partial** — deterministic base **verified** ([scripts/analytics.py](../scripts/analytics.py)): PageRank + WCC end-to-end on all 3.1 M nodes (self-managed ACP GAE); agentic **planning** layer **completes** ([scripts/analytics_agentic.py](../scripts/analytics_agentic.py)): NL requirements → 10 GAE use cases. Remaining (optional): the fully-autonomous NL→execute→report loop |
 | G9 | **Time-travel (temporal) queries** — point-in-time as-of, current-state, and year-over-year diff over the 10 fiscal years | Numeric `validFrom`/`validTo` on `relations` + an MDI temporal index; as-of / current / diff queries return correct rows and are index-backed (MDI for unbounded, persistent composite for node-anchored — verified §4.8); built in `FinReflectKgTemporal` | **Done** — `FinReflectKgTemporal` (OneShard) built & validated: 17.51 M edges carry `validFrom`/`validTo`, as-of is MDI-backed (verified via `explain`), AAPL `operates_in` as-of 48/76/85 (2014/18/24) ([build_temporal.sh](../scripts/build_temporal.sh), [validate_temporal.py](../scripts/validate_temporal.py)) |
+| G10 | **BYOC packaging of the demo UI** — run the G9-P5 visualizer as an ArangoDB platform service rather than on a laptop | A container serving port 8000 at the root path, packaged via `servicemaker`, deployed under `/_services/<name>/`, authenticating to the database by forwarding the caller's JWT (no stored credentials) | **Designed** — runtime contract established from the `servicemaker` chart and reference service; three gaps to close in the demo (port/entrypoint, relative URLs, JWT pass-through). See §4.9 |
 
 ### Non-goals (this phase)
 
@@ -709,6 +731,66 @@ Deliverables: `demo/static/{index.html,style.css,app.js}`, [demo/api.py](../demo
 
 **Status: built (v1.5, v0.21).**
 
+### 4.9 BYOC packaging of the demo UI — G10
+
+The G9-P5 demo runs locally today (`uvicorn demo.api:app`, credentials from `.env`). The
+ArangoDB **Contextual Data Platform** can host it as a **platform service** via **BYOC**
+(bring-your-own-container), so the demo is reachable from the deployment itself rather than
+a laptop. Evidence below is from
+[arangodb/servicemaker](https://github.com/arangodb/servicemaker) — the packaging tool and
+its Helm chart — not from the marketing post, which omits the runtime contract.
+
+**The container contract is small.** Serve HTTP on **port 8000** at the **root path**. That
+is the whole hard requirement; any language or image is acceptable. `servicemaker` wraps a
+project into an image derived from `arangodb/py12base:latest` (Python **3.12**, uv-managed
+venv, project at `/project/<dir>`, entrypoint a Python script) and also emits a Helm chart
+and a tar.gz layer.
+
+**Routing strips the prefix.** The chart's `ArangoRoute` publishes the service at
+`/_services/<service-name>/` with a destination `path: "/"` — so envoy rewrites
+`/_services/finreflectkg/api/timeline` to `/api/timeline` before it reaches the service.
+The service sees clean root-relative paths; **the browser does not**. Any absolute asset or
+API URL in the frontend (`/app.js`, `/api/…`) resolves to the domain root, misses the
+prefix, and 404s. **All frontend URLs must be relative.**
+
+**Credentials are never stored in the service.** The route sets
+`authentication: {type: required, passMode: pass}` — envoy authenticates the caller, then
+passes the `Authorization` header through. The service reads the coordinator URL from the
+injected **`ARANGO_DEPLOYMENT_ENDPOINT`** env var and authenticates *as the caller* by
+forwarding their JWT:
+
+```python
+client = ArangoClient(hosts=os.environ["ARANGO_DEPLOYMENT_ENDPOINT"], verify_override=False)
+db = client.db(name=db_name, auth_method="jwt", user_token=token)   # token from the request
+```
+
+This **inverts our current model** (one root credential in `.env`, every query as root) and
+is strictly better: no password in the image, and every query is subject to the caller's
+own permissions. It is a refactor of the data path, not a configuration change —
+[scripts/arango.py](../scripts/arango.py) binds `ARANGO_USER`/`ARANGO_PASSWORD` at module
+scope and signs each request with Basic auth, so a per-request credential has to be
+threaded through every endpoint. `verify_override=False` is expected in-platform
+(self-signed certs). Only `PORT` is injected by the chart itself; the endpoint variable
+comes from the platform's Container Manager.
+
+**Conformance of the current demo.**
+
+| Requirement | Status |
+|---|---|
+| HTTP at root path | **met** — `StaticFiles` mounted at `/` |
+| No CDN dependency | **met** — Cytoscape vendored at `demo/static/vendor/` |
+| Port 8000, bind `0.0.0.0` | **gap** — 8080 via the uvicorn CLI, no in-process entrypoint |
+| Relative frontend URLs | **gap** — `/api/…`, `/style.css`, `/app.js`, `/vendor/…` are absolute |
+| JWT pass-through auth | **gap** — Basic auth as root from `.env` |
+| Python entrypoint script | **gap** — started via the uvicorn CLI |
+
+**Applies to more than this repo.** `gdelt-market-impact`'s what-if UI is the same shape
+(FastAPI + vendored Cytoscape over ArangoDB) and already binds **port 8000** at the root
+path with assets vendored locally — it is BYOC-shaped already and needs only the URL and
+auth changes. The packaging work should be designed once and applied to both.
+
+**Status: designed, not built (G10, v0.22).**
+
 ## 5. Sizing (from data analysis)
 
 See [data-analysis.md](data-analysis.md) for measured numbers, [load-report.md](load-report.md)
@@ -760,6 +842,7 @@ Note: latency on the shared remote cluster is noisy (a single query has ranged
 | M6 | Multi-distribution builds (OneShard + SmartGraph) | G7 | **Done** — OneShard and SmartGraph both built & verified ([multi-distribution-plan.md](multi-distribution-plan.md)) |
 | M7 | Graph analytics via GAE (deterministic jobs + agentic NL→insights) | G8, §4.7 | **Partial** — base verified (PageRank + WCC on 3.1 M nodes, [scripts/analytics.py](../scripts/analytics.py)); agentic planning completes (NL → 10 use cases, [scripts/analytics_agentic.py](../scripts/analytics_agentic.py)); autonomous execute→report loop optional/pending |
 | M8 | Time-travel layer (`FinReflectKgTemporal`, OneShard) | G9, §4.8 | **Done** — built via [scripts/build_temporal.sh](../scripts/build_temporal.sh) (augment → OneShard import → MDI + composite VCIs → graph → validate); 17,513,372 edges, validation green. Includes a data-quality clamp on OCR-noisy start years (§4.8) |
+| M9 | BYOC container for the demo UI | G10, §4.9 | **Designed** — container contract, routing/prefix behaviour and the JWT pass-through auth model documented from [arangodb/servicemaker](https://github.com/arangodb/servicemaker); applies equally to `gdelt-market-impact`'s what-if UI, which already meets the port/root-path/no-CDN requirements |
 
 ## 8. Risks & open questions
 
