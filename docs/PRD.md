@@ -1,6 +1,6 @@
 # PRD — FinReflectKG on ArangoDB (Proof of Concept)
 
-**Status:** Draft v0.22 · 2026-08-26 (BYOC packaging of the demo UI scoped — G10/§4.9: port-8000 root-path container, prefix-stripping route, JWT pass-through auth; applies to `gdelt-market-impact` too)
+**Status:** Draft v0.23 · 2026-08-26 (BYOC scoped against the first-party packaging skill — G10/§4.9: Bring-Your-Own-**Code** path, `uv`/`pyproject.toml`, prefix-stripping route, JWT pass-through; Python 3.12-vs-3.13 discrepancy flagged)
 **Authors:** Arthur Keen (ArangoDB)
 **Related docs:** [data-analysis.md](data-analysis.md) · [etl-plan.md](etl-plan.md) ·
 [load-report.md](load-report.md) · [sharding-analysis.md](sharding-analysis.md) ·
@@ -11,6 +11,24 @@
 
 ## 0. Changelog
 
+- **v0.23 (2026-08-26):** **BYOC scope corrected against the first-party packaging skill
+  (G10/§4.9).** Emmet Allen's `package-for-arango-byoc-skill.md` supplied detail the derived
+  account missed and changed the recommendation. **(1) The two paths have colliding names** —
+  *Bring Your Own **Code*** (upload `.tar.gz`, platform builds it) vs *Bring Your Own
+  **Container*** (Docker image URL); the skill documents the **Code** path, and we now take it:
+  no registry to host, and it is what the first-party tooling targets. The artifact is
+  `project.tar.gz` under `target/<project>/`; manual packaging is `pyproject.toml` + `main.py` +
+  `tar -czf`. **(2) `uv` + `pyproject.toml` are required**, and `uv sync --extra` is
+  **unsupported** — everything must live in the main `dependencies` array. The demo declares
+  deps in `demo/requirements.txt`, so that is a fourth gap alongside port/entrypoint, relative
+  URLs and JWT pass-through. **(3) Deploy-time choices** now recorded: Global (`_system`) vs
+  database-specific scoping, `app_instance_name` for multiple instances of one version, and the
+  upload metadata (file name, semantic version, service URL path). **(4) A version
+  contradiction is flagged rather than resolved:** the skill and the blog both say Python
+  **3.13** and the skill's ARM64 fix builds `Dockerfile.py13base`, but `servicemaker@main`
+  (2026-08-24) ships only `py12base`/`py12cugraph`/`py12torch`/`node22base` and hard-codes
+  `DEFAULT_PYTHON_BASE_IMAGE = "arangodb/py12base:latest"` — so that documented workaround will
+  fail with *no such file*. Needs confirming with the platform team before we pin a version.
 - **v0.22 (2026-08-26):** **BYOC packaging of the demo UI scoped (new G10 / §4.9).** The
   platform can host the G9-P5 visualizer as a **platform service**; the runtime contract was
   established from [arangodb/servicemaker](https://github.com/arangodb/servicemaker) (the
@@ -740,11 +758,28 @@ a laptop. Evidence below is from
 [arangodb/servicemaker](https://github.com/arangodb/servicemaker) — the packaging tool and
 its Helm chart — not from the marketing post, which omits the runtime contract.
 
-**The container contract is small.** Serve HTTP on **port 8000** at the **root path**. That
-is the whole hard requirement; any language or image is acceptable. `servicemaker` wraps a
-project into an image derived from `arangodb/py12base:latest` (Python **3.12**, uv-managed
-venv, project at `/project/<dir>`, entrypoint a Python script) and also emits a Helm chart
-and a tar.gz layer.
+**Two deployment paths, and the names collide.** The platform offers *Bring Your Own
+**Code*** — upload a `.tar.gz`, the platform builds it on a hardened base image — and *Bring
+Your Own **Container*** — supply a Docker image URL. Both get abbreviated "BYOC"; the
+first-party packaging skill (`package-for-arango-byoc-skill.md`, Emmet Allen) documents the
+**Code** path. **We take the Code path**: it needs no container registry the platform can
+pull from, and it is the flow the first-party tooling and skill actually target. The
+Container path stays available if we later need a non-Python runtime.
+
+**The contract is small.** Serve HTTP on **port 8000** at the **root path**. Dependencies via
+**`uv`**, declared in a **`pyproject.toml`**. `servicemaker` wraps the project into an image
+derived from the base image, and emits a Helm chart plus the `project.tar.gz` that the
+Container Manager consumes (found under `target/<project>/`). Manual packaging is supported
+too: a `pyproject.toml` plus `main.py`, then `tar -czf myservice.tar.gz <project_dir>/`.
+
+> **⚠ Python version — the sources disagree.** The first-party skill and the announcement
+> post both state **Python 3.13**, and the skill's ARM64 workaround tells you to build
+> `Dockerfile.py13base`. As of `servicemaker@main` (2026-08-24) **that file does not exist**:
+> `baseimages/` ships only `Dockerfile.py12base`, `py12cugraph`, `py12torch` and
+> `node22base`; `imagelist.txt` lists the same four; and `src/main.rs` hard-codes
+> `DEFAULT_PYTHON_BASE_IMAGE = "arangodb/py12base:latest"`. So the tool as shipped is **3.12**
+> and the documented ARM workaround will fail with *no such file*. Confirm the intended
+> version with the platform team before pinning ours.
 
 **Routing strips the prefix.** The chart's `ArangoRoute` publishes the service at
 `/_services/<service-name>/` with a destination `path: "/"` — so envoy rewrites
@@ -783,6 +818,20 @@ comes from the platform's Container Manager.
 | Relative frontend URLs | **gap** — `/api/…`, `/style.css`, `/app.js`, `/vendor/…` are absolute |
 | JWT pass-through auth | **gap** — Basic auth as root from `.env` |
 | Python entrypoint script | **gap** — started via the uvicorn CLI |
+| `pyproject.toml` with `uv` deps | **gap** — the demo declares deps in `demo/requirements.txt`; the Code path needs a `pyproject.toml`, with nothing in optional extras |
+
+**Packaging gotchas (from the first-party skill).**
+- **`uv sync --extra` is unsupported** by `servicemaker` — every needed package must sit in the
+  main `dependencies` array of `pyproject.toml`, not in an optional-extras group.
+- **ARM64 hosts** may pull an AMD64 base image and fail; build the base image locally first
+  (subject to the version caveat above).
+- **Scoping** is chosen at deploy time: *Global* (hosted on `_system`, reachable from every
+  database) or *database-specific* for an isolated workload. The demo is read-only against
+  `FinReflectKgTemporal`, so database-specific is the tighter fit.
+- **Multiple instances of one version** in a single database need a distinct
+  `app_instance_name`.
+- **Deployment metadata** at upload: file name, semantic version, and the service URL path
+  (the `<name>` in `/_services/<name>/`).
 
 **Applies to more than this repo.** `gdelt-market-impact`'s what-if UI is the same shape
 (FastAPI + vendored Cytoscape over ArangoDB) and already binds **port 8000** at the root
