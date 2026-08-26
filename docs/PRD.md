@@ -1,6 +1,6 @@
 # PRD — FinReflectKG on ArangoDB (Proof of Concept)
 
-**Status:** Draft v0.23 · 2026-08-26 (BYOC scoped against the first-party packaging skill — G10/§4.9: Bring-Your-Own-**Code** path, `uv`/`pyproject.toml`, prefix-stripping route, JWT pass-through; Python 3.12-vs-3.13 discrepancy flagged)
+**Status:** Draft v0.24 · 2026-08-26 (BYOC corrected against `gdelt-market-impact/deploy/`, a verified implementation — G10/§4.9: Python 3.13 confirmed, credentials are BAKED not injected, six packaging gotchas, port that scaffolding rather than rebuild it)
 **Authors:** Arthur Keen (ArangoDB)
 **Related docs:** [data-analysis.md](data-analysis.md) · [etl-plan.md](etl-plan.md) ·
 [load-report.md](load-report.md) · [sharding-analysis.md](sharding-analysis.md) ·
@@ -11,6 +11,28 @@
 
 ## 0. Changelog
 
+- **v0.24 (2026-08-26):** **BYOC corrected against a working implementation — two of v0.23's
+  claims were wrong (G10/§4.9).** `gdelt-market-impact/deploy/` already ships both paths,
+  verified running against its live database, and it settles the two questions v0.23 left open
+  the wrong way round. **(1) Python 3.13 is correct; the version warning is retracted.**
+  `arangodb/py13base:latest` (3.13.13) is on Docker Hub and works — the public `servicemaker`
+  repo is simply behind the skill. What remains true is narrower: the skill's ARM64 fallback
+  cannot be followed literally (`Dockerfile.py13base` is not in the public repo) and is not
+  needed. Additionally **`py12base` ships no `uv` at all**, a second reason to be on 3.13.
+  **(2) The platform does NOT inject credentials** — confirmed with Emmet Allen — so the JWT
+  pass-through model recorded in v0.22/v0.23 is not how a deployed service gets database access.
+  A service uses what it was *built* with; `.env` is baked in, and **the artifact therefore
+  becomes a secret** (gitignore `*.tar.gz`, label and gate credential-bearing images, rotate the
+  password if one escapes). The JWT path still exists — the route does forward the caller's
+  token — but it is a service-design choice and a data-path refactor here, not something the
+  platform hands you. **(3) Six new gotchas recorded** from that implementation: arm64 images
+  push silently and fail to start (build `linux/amd64`); `uv` is off `PATH` in a `RUN` layer
+  (bare `exit 127`); no `pip` in the venv (use `uv pip install -c constraints.txt`); quoted
+  `.env` values survive `--env-file` but not `python-dotenv`, surfacing as a misleading 401;
+  `.dockerignore` large data dirs; and ServiceMaker's one-directory/one-entrypoint assumption
+  breaks sibling imports. **(4) Plan of record: port `gdelt-market-impact/deploy/`** rather than
+  write our own — [demo/api.py](../demo/api.py) has the identical sibling-import shape its
+  `package.sh` was built to handle.
 - **v0.23 (2026-08-26):** **BYOC scope corrected against the first-party packaging skill
   (G10/§4.9).** Emmet Allen's `package-for-arango-byoc-skill.md` supplied detail the derived
   account missed and changed the recommendation. **(1) The two paths have colliding names** —
@@ -772,14 +794,14 @@ derived from the base image, and emits a Helm chart plus the `project.tar.gz` th
 Container Manager consumes (found under `target/<project>/`). Manual packaging is supported
 too: a `pyproject.toml` plus `main.py`, then `tar -czf myservice.tar.gz <project_dir>/`.
 
-> **⚠ Python version — the sources disagree.** The first-party skill and the announcement
-> post both state **Python 3.13**, and the skill's ARM64 workaround tells you to build
-> `Dockerfile.py13base`. As of `servicemaker@main` (2026-08-24) **that file does not exist**:
-> `baseimages/` ships only `Dockerfile.py12base`, `py12cugraph`, `py12torch` and
-> `node22base`; `imagelist.txt` lists the same four; and `src/main.rs` hard-codes
-> `DEFAULT_PYTHON_BASE_IMAGE = "arangodb/py12base:latest"`. So the tool as shipped is **3.12**
-> and the documented ARM workaround will fail with *no such file*. Confirm the intended
-> version with the platform team before pinning ours.
+**Python 3.13, via `arangodb/py13base:latest`.** The skill is right and the public
+`servicemaker` repo is behind it: `baseimages/` and `imagelist.txt` still name only the 3.12
+images and `src/main.rs` hard-codes `py12base`, but **`arangodb/py13base:latest` is on Docker
+Hub** (Python 3.13.13) and is verified working — `gdelt-market-impact` runs both deployment
+paths on it. Two consequences: the skill's ARM64 fallback ("build `Dockerfile.py13base`
+locally") cannot be followed literally because that file is not in the public repo, and it is
+not needed; and **`py12base` does not ship `uv` at all**, which is a second reason to stay on
+3.13.
 
 **Routing strips the prefix.** The chart's `ArangoRoute` publishes the service at
 `/_services/<service-name>/` with a destination `path: "/"` — so envoy rewrites
@@ -788,25 +810,28 @@ The service sees clean root-relative paths; **the browser does not**. Any absolu
 API URL in the frontend (`/app.js`, `/api/…`) resolves to the domain root, misses the
 prefix, and 404s. **All frontend URLs must be relative.**
 
-**Credentials are never stored in the service.** The route sets
-`authentication: {type: required, passMode: pass}` — envoy authenticates the caller, then
-passes the `Authorization` header through. The service reads the coordinator URL from the
-injected **`ARANGO_DEPLOYMENT_ENDPOINT`** env var and authenticates *as the caller* by
-forwarding their JWT:
+**Credentials are baked into the artifact — the platform does not inject them.**
+Confirmed with Emmet Allen, 2026-08-26, and it contradicts the announcement's "handles
+authentication automatically": a deployed service uses whatever it was **built** with; there is
+no injection step. The chart injects only `PORT`. So the artifact carries `.env`, and
+**the artifact becomes the secret** — a `.tar.gz` is one command from plaintext and an image is
+`docker save` plus an untar, so either must be handled exactly like `.env` itself. The
+mitigations that work (proven in `gdelt-market-impact/deploy/`): credential-free by default with
+an explicit, warning `--with-env` flag; `*.tar.gz` gitignored; credential-bearing images
+labelled and refused for push without an explicit acknowledgement env var; and if one escapes,
+**rotate the database password** — deleting a tag does not purge layers from caches and
+registries. If Container Manager later gains deploy-time environment variables, prefer them: the
+artifact stops being a secret and rotation stops meaning a rebuild.
 
-```python
-client = ArangoClient(hosts=os.environ["ARANGO_DEPLOYMENT_ENDPOINT"], verify_override=False)
-db = client.db(name=db_name, auth_method="jwt", user_token=token)   # token from the request
-```
-
-This **inverts our current model** (one root credential in `.env`, every query as root) and
-is strictly better: no password in the image, and every query is subject to the caller's
-own permissions. It is a refactor of the data path, not a configuration change —
-[scripts/arango.py](../scripts/arango.py) binds `ARANGO_USER`/`ARANGO_PASSWORD` at module
-scope and signs each request with Basic auth, so a per-request credential has to be
-threaded through every endpoint. `verify_override=False` is expected in-platform
-(self-signed certs). Only `PORT` is injected by the chart itself; the endpoint variable
-comes from the platform's Container Manager.
+*A JWT path exists but is a service-design choice, not platform-provided credentials.* The route
+sets `authentication: {type: required, passMode: pass}`, so envoy authenticates the caller and
+forwards the `Authorization` header; a service **may** therefore connect as the caller
+(`auth_method="jwt", user_token=token`), which is what `servicemaker`'s `arango-test-service`
+does, reading its coordinator URL from `ARANGO_DEPLOYMENT_ENDPOINT`. That is strictly better —
+no secret in the artifact, and queries respect the caller's own RBAC — but it is a data-path
+refactor here, since [scripts/arango.py](../scripts/arango.py) binds credentials at module scope
+and signs Basic auth. Baking is the shorter path to a working deployment; JWT pass-through is the
+better end state.
 
 **Conformance of the current demo.**
 
@@ -816,11 +841,37 @@ comes from the platform's Container Manager.
 | No CDN dependency | **met** — Cytoscape vendored at `demo/static/vendor/` |
 | Port 8000, bind `0.0.0.0` | **gap** — 8080 via the uvicorn CLI, no in-process entrypoint |
 | Relative frontend URLs | **gap** — `/api/…`, `/style.css`, `/app.js`, `/vendor/…` are absolute |
-| JWT pass-through auth | **gap** — Basic auth as root from `.env` |
+| Credentials available at runtime | **gap** — needs `.env` baked in (`--with-env`), which makes the artifact a secret; or a JWT-pass-through refactor |
 | Python entrypoint script | **gap** — started via the uvicorn CLI |
 | `pyproject.toml` with `uv` deps | **gap** — the demo declares deps in `demo/requirements.txt`; the Code path needs a `pyproject.toml`, with nothing in optional extras |
 
-**Packaging gotchas (from the first-party skill).**
+**Reuse the working scaffolding.** `gdelt-market-impact/deploy/` already implements both
+paths against `py13base` and is **verified running** against its live database (both routes
+answer `/` and an API endpoint). Its author notes nothing there is GDELT-specific beyond two
+`COPY` lines and one copy list, and names FinReflectKG as the reuse target. Crucially our demo
+has the **same sibling-import shape** that its `package.sh` exists to solve —
+[demo/api.py](../demo/api.py) does `sys.path.insert(0, ROOT/"scripts")` then
+`from arango import req`, exactly as its `app/main.py` imports `scripts/_common.py` — so the
+tree-reassembly logic ports directly rather than needing to be rediscovered. Porting that
+scaffolding is the plan of record; writing our own is not.
+
+**Packaging gotchas (from the first-party skill, plus what `gdelt-market-impact` hit).**
+- **Build `linux/amd64` explicitly.** On Apple Silicon an arm64 image **pushes without
+  complaint and then does not start** — a silent failure, so pass `--platform linux/amd64`
+  rather than relying on the skill's build-the-base-image-locally alternative.
+- **`uv` is not on `PATH` inside a `RUN` layer** — it lives in `~/.local/bin`, so a non-login
+  shell cannot see it and the build dies as a bare `exit 127`. Source
+  `/home/user/.local/bin/env` first.
+- **There is no `pip` in the venv** (the base is deliberately stripped). Use
+  `uv pip install -c /home/user/constraints.txt`, which also stops an added package floating a
+  version away from what the pre-scanned base pins.
+- **Quoted values in `.env` bite asymmetrically.** `python-dotenv` strips surrounding quotes;
+  `docker run --env-file` does not. The symptom is `[HTTP 401] bad username/password`, which
+  points nowhere near the cause — strip quotes defensively when reading config.
+- **`.dockerignore` the data directories** or the daemon copies the corpus on every build.
+- **ServiceMaker assumes one project directory and one entrypoint**, so a repo with sibling
+  imports needs a reassembled self-contained tree; flattening it builds fine and fails at
+  import time inside the platform.
 - **`uv sync --extra` is unsupported** by `servicemaker` — every needed package must sit in the
   main `dependencies` array of `pyproject.toml`, not in an optional-extras group.
 - **ARM64 hosts** may pull an AMD64 base image and fail; build the base image locally first
