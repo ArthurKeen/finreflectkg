@@ -19,8 +19,13 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="/style.css">
-  <script src="/vendor/cytoscape.min.js"></script>
+  <!-- Relative, so the BYOC path prefix (/_service/uds/_global/<app>/) is preserved;
+       an absolute /style.css would hit the coordinator root. These resolve against the
+       document base, so they assume the service is reached WITH its trailing slash —
+       Container Manager serves it that way. The API calls in app.js do not share this
+       assumption; see serviceBase there. -->
+  <link rel="stylesheet" href="style.css">
+  <script src="vendor/cytoscape.min.js"></script>
 </head>
 <body>
   <header>
@@ -81,6 +86,6 @@
     </aside>
   </main>
   <div id="legend"></div>
-  <script src="/app.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>

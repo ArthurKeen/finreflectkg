@@ -47,3 +47,8 @@ data/demo_screenshot.png
 
 # Editor + tool backups
 *.bak
+
+# BYOC artifacts — a .tar.gz built with --with-env contains .env in plaintext
+target/
+*.tar.gz
+deploy/.env-or-empty/

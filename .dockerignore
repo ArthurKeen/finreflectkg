@@ -1,0 +1,31 @@
+# Build context hygiene. data/ is ~23 GB (raw parquet + staging JSONL); without this
+# the daemon copies the whole corpus on every build.
+data/
+backups/
+target/
+build/
+
+.git/
+.venv/
+.venv311/
+__pycache__/
+**/__pycache__/
+*.pyc
+.ruff_cache/
+.pytest_cache/
+
+# Never let a credential ride in implicitly — deploy/build.sh stages .env explicitly
+# under deploy/.env-or-empty/ when --with-env is asked for.
+.env
+.env.*
+!.env.example
+
+docs/
+*.pdf
+*.png
+.DS_Store
+.claude/
+.cursor/
+.pattern-capture-queue/
+.prd-drift-queue/
+nl_corrections.db

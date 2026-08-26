@@ -1,0 +1,20 @@
+# Dependency spec for the BYOC service. Emmet's Package-for-Arango-BYOC skill makes
+# pyproject.toml + uv the house standard, and ServiceMaker reads this file directly.
+#
+# Everything lives in [project].dependencies with NO optional-dependencies:
+# ServiceMaker does not support `uv sync --extra`, so an extras group is silently
+# dropped and the service fails on its first import.
+#
+# This is the SERVING set only, and it is deliberately tiny: the demo talks to
+# ArangoDB through scripts/arango.py, which is stdlib-only (urllib + ssl + json), so
+# neither python-arango nor python-dotenv is needed. The repo's own ETL/analytics
+# toolchain is not part of the service.
+[project]
+name = "finreflectkg-timetravel"
+version = "1.0.0"
+description = "FinReflectKG time-travel demo — read-only visualizer over FinReflectKgTemporal"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+]

@@ -12,9 +12,10 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
-from arango import req  # scripts/arango.py (stdlib-only REST helper driven by .env)
+from arango import NotConfigured, req  # scripts/arango.py (stdlib-only REST helper)
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 DB = "FinReflectKgTemporal"
@@ -22,6 +23,17 @@ ANCHORS = [2014, 2019, 2020, 2024]   # years with a materialized GAE PageRank (g
 YEAR_MIN, YEAR_MAX = 2014, 2024
 
 app = FastAPI(title="FinReflectKG Time-Travel Demo")
+
+
+@app.exception_handler(NotConfigured)
+async def _not_configured(_request, exc):
+    """503 with the actual reason, not an opaque 500.
+
+    The BYOC image is built credential-free by default, so an operator WILL hit this.
+    Telling them which variables are missing is the difference between a two-minute
+    fix and an afternoon reading logs.
+    """
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
 
 
 def aql(query, bind=None, timeout=60):
