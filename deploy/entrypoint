@@ -1,0 +1,96 @@
+entrypoint = __file__
+# ^ Line 1 MUST begin with the literal token `entrypoint`: the Arango Container
+# Manager runs `python /project/<first word of this file>`. No shebang, no
+# docstring, no import above this line.
+#
+# Boot sequence for the FinReflectKG time-travel bundle:
+#   1. install requirements.txt into this interpreter (uv if present, else pip)
+#   2. load the baked .env, refusing a loopback ARANGO_ENDPOINT — no ArangoDB runs
+#      in this pod, so localhost means the bundle was packaged wrong
+#   3. exec uvicorn on demo.api:asgi_app, which strips SERVICE_URL_PATH_PREFIX
+#
+# The platform injects no environment; credentials travel in the bundle's .env.
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+REQUIREMENTS = ROOT / "requirements.txt"
+
+
+def _log(msg):
+    print(f"==> {msg}", flush=True)
+
+
+def _find_uv():
+    for candidate in (os.environ.get("UV_BINARY", "").strip(), shutil.which("uv"),
+                      "/usr/local/bin/uv", "/usr/bin/uv",
+                      str(Path.home() / ".local" / "bin" / "uv")):
+        if candidate and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def _install():
+    if os.environ.get("FRKG_SKIP_INSTALL", "").lower() in ("1", "true", "yes"):
+        _log("FRKG_SKIP_INSTALL set — using pre-installed dependencies")
+        return
+    if not REQUIREMENTS.is_file():
+        sys.exit(f"ERROR: {REQUIREMENTS} missing from the bundle")
+    uv = _find_uv()
+    if uv:
+        _log(f"installing requirements with uv ({uv})")
+        subprocess.run([uv, "pip", "install", "--python", sys.executable,
+                        "-r", str(REQUIREMENTS)], cwd=ROOT, check=True)
+        return
+    # py12base ships no uv and its venv may lack pip entirely.
+    _log("uv not found — bootstrapping pip via ensurepip")
+    subprocess.run([sys.executable, "-m", "ensurepip", "--upgrade", "--default-pip"],
+                   cwd=ROOT, check=False)
+    _log("pip install -r requirements.txt")
+    subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
+                    "-r", str(REQUIREMENTS)], cwd=ROOT, check=True)
+
+
+def _load_dotenv():
+    """Minimal .env loader — python-dotenv is not in the serving requirements.
+    Existing environment variables win."""
+    env_file = ROOT / ".env"
+    if not env_file.is_file():
+        _log("no .env in bundle — relying on platform-provided environment")
+        return
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+
+
+def main():
+    os.chdir(ROOT)
+    _log(f"FinReflectKG time-travel BYOC entrypoint in {ROOT} (python {sys.version.split()[0]})")
+    _install()
+    _load_dotenv()
+    endpoint = os.environ.get("ARANGO_ENDPOINT", "")
+    if not endpoint or not os.environ.get("ARANGO_PASSWORD"):
+        sys.exit("ERROR: ARANGO_ENDPOINT / ARANGO_PASSWORD not set — the bundle's "
+                 ".env is missing or incomplete")
+    if "localhost" in endpoint.lower() or "127.0.0.1" in endpoint:
+        sys.exit("ERROR: ARANGO_ENDPOINT points at loopback — unreachable from the "
+                 "platform pod. Bake the cluster endpoint into .env.")
+    prefix = os.environ.get("SERVICE_URL_PATH_PREFIX", "")
+    port = os.environ.get("PORT") or "8000"
+    _log(f"ArangoDB {endpoint}  serving db FinReflectKgTemporal")
+    _log(f"mount prefix: {prefix or '(none)'}  listening on 0.0.0.0:{port}")
+    os.environ["PYTHONPATH"] = str(ROOT) + (
+        os.pathsep + os.environ["PYTHONPATH"] if os.environ.get("PYTHONPATH") else "")
+    os.execvp(sys.executable, [sys.executable, "-m", "uvicorn", "demo.api:asgi_app",
+                               "--host", "0.0.0.0", "--port", str(port),
+                               "--log-level", "info"])
+
+
+if __name__ == "__main__":
+    main()

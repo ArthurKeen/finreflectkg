@@ -370,3 +370,12 @@ def backward(ticker: str, lag: int = 3, limit: int = 25):
 
 
 app.mount("/", StaticFiles(directory=str(pathlib.Path(__file__).resolve().parent / "static"), html=True))
+
+
+# --- BYOC mount prefix -------------------------------------------------------
+# On the platform this service is mounted at /_service/uds/_db/<db>/<instance>/ and
+# the ingress forwards the prefix INTACT, while these routes stay at / and /api.
+# `asgi_app` is what deploy/entrypoint serves; `app` is unchanged for local runs.
+from demo.prefix import with_prefix  # noqa: E402
+
+asgi_app = with_prefix(app)

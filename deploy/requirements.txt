@@ -1,0 +1,9 @@
+# Runtime dependencies for the BYOC bundle, installed by `deploy/entrypoint` at boot.
+# requirements.txt rather than pyproject+uv because py12base — the only Python base
+# image this cluster offers (confirmed from a live service's serviceMeta.udsMeta) —
+# ships no uv, so the entrypoint bootstraps pip via ensurepip.
+#
+# SERVING set only. scripts/arango.py is deliberately stdlib-only (urllib), so there
+# is no python-arango here; the repo's analysis toolchain is not part of the service.
+fastapi>=0.110
+uvicorn>=0.29
