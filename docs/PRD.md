@@ -1,6 +1,6 @@
 # PRD — FinReflectKG on ArangoDB (Proof of Concept)
 
-**Status:** Draft v0.25 · 2026-08-26 (BYOC **built, deployed and live** — G10/M9 IMPLEMENTED: both artifact shapes verified across five paths; a latent `.env`-at-import defect in `scripts/arango.py` fixed; the platform prefix form corrected to `/_service/uds/_global/<app>/`)
+**Status:** Draft v0.26 · 2026-09-26 (BYOC **deployed and serving on prod.demo** — G10 DEPLOYED; §4.9 corrected on three counts the August draft got wrong: the bundle is FLAT not wrapped, the base image is `py12base` not `py13base`, and the ingress forwards the mount prefix INTACT rather than stripping it)
 **Authors:** Arthur Keen (ArangoDB)
 **Related docs:** [data-analysis.md](data-analysis.md) · [etl-plan.md](etl-plan.md) ·
 [load-report.md](load-report.md) · [sharding-analysis.md](sharding-analysis.md) ·
@@ -11,6 +11,21 @@
 
 ## 0. Changelog
 
+- **v0.26 (2026-09-26):** **BYOC deployed and verified on prod.demo**, at
+  `/_service/uds/_db/FinReflectKgTemporal/finreflect/`. Getting there required correcting three
+  things v0.24–v0.25 asserted and never tested against the platform: **(1)** the bundle must be a
+  **flat** archive with `entrypoint` and `requirements.txt` at its root — the wrapped layout those
+  versions produced belongs to the container-image contract and cannot boot as a platform package;
+  **(2)** the base image is **`py12base`**, the only Python image this cluster offers, which ships
+  no `uv`, so the entrypoint bootstraps pip via `ensurepip` — `py13base` is on Docker Hub but not
+  on this platform; **(3)** the ingress **forwards the mount prefix intact**, so the app must strip
+  it ([demo/prefix.py](../demo/prefix.py)) — the claim that envoy strips it was wrong, and the
+  client-side relative-URL work is a separate, equally necessary half. The root cause of having no
+  deployment at all was simpler: this repo had no `scripts/byoc_deploy.py`, while
+  project-sentinel, gdelt-market-impact, agentic-graph-analytics, arango-ontoextract and
+  multihop-eval all did. That script is now ported. Verified live: 743 companies, anchors
+  2014/2019/2020/2024, aapl-2020 depth-1 at 125 nodes / 140 edges, msft-2024 depth-2 at 146/197,
+  and all three relative assets served.
 - **v0.25 (2026-08-26):** **BYOC built, deployed and live.** G10 and M9 move to
   IMPLEMENTED/DONE. `deploy/` ships both artifact shapes (container image via `build.sh`,
   ServiceMaker code package via `package.sh`) plus an operator README; five deployment paths
@@ -70,13 +85,15 @@
   established from [arangodb/servicemaker](https://github.com/arangodb/servicemaker) (the
   packaging tool, its Helm chart and its reference service) rather than the announcement post,
   which omits it. Three findings drive the work. **(1) The container contract is small** — HTTP
-  on **port 8000** at the **root path**, any image; the image used here is
-  `arangodb/py13base:latest` (Python 3.13.13, ships `uv`, entrypoint a Python script);
-  `py12base` ships no `uv`. **(2) Routing
-  strips the prefix** — the `ArangoRoute` publishes at `/_service/uds/_global/<app>/` with destination
-  `path: "/"`, so the service sees clean paths but the browser does not: every absolute URL in
-  the frontend (`/app.js`, `/api/…`) misses the prefix and 404s, so they must all become
-  relative. **(3) Credentials are NOT injected by the platform.** Envoy authenticates the
+  on **port 8000** at the **root path**, any image; the platform runs
+  `py12base` — the only Python base image this cluster offers. It ships **no** `uv`, so the
+  bundle installs from `requirements.txt` via `ensurepip`. `py13base` exists on Docker Hub
+  but not on this platform. **(2) Routing forwards the prefix INTACT** — the service is
+  published at `/_service/uds/_db/<db>/<instance>/` and the ingress does **not** strip the
+  prefix, so BOTH halves need fixing: the browser must use relative URLs (an absolute
+  `/app.js` or `/api/…` resolves to the coordinator root and 404s), AND the app must strip
+  the prefix before routing. Earlier drafts of this section claimed envoy strips it; that
+  was wrong, and a bundle built on it 404s on every request. **(3) Credentials are NOT injected by the platform.** Envoy authenticates the
   caller and *can* pass the JWT through, but a deployed service connects with whatever it was
   **built** with — forwarding the caller's JWT is a service-design choice, not something the
   platform does for you. Confirmed with Emmet Allen, 2026-08-26; the announcement's "handles
@@ -358,7 +375,7 @@ This is a POC to load that dataset into a managed ArangoDB deployment and evalua
 | G7 | Multiple distributions for comparative scale benchmarking | Same dataset built as a **OneShard** db (`FinReflectKgOneShard`) and a **sharded SmartGraph** db (`FinReflectKgSmart`) alongside the baseline `FinReflectKG`; sharding verified (see §4.5) | **Done** — OneShard and SmartGraph both built & verified ([multi-distribution-plan.md](multi-distribution-plan.md)) |
 | G8 | Graph analytics over the graph (GAE): centrality/PageRank, connected components (WCC/SCC), community detection — deterministic jobs + an agentic NL→insights layer | Reproducible GAE jobs on `Node`/`relations` with recorded results (non-mutating result collections), plus an NL/requirements→insights flow (see §4.7) | **Partial** — deterministic base **verified** ([scripts/analytics.py](../scripts/analytics.py)): PageRank + WCC end-to-end on all 3.1 M nodes (self-managed ACP GAE); agentic **planning** layer **completes** ([scripts/analytics_agentic.py](../scripts/analytics_agentic.py)): NL requirements → 10 GAE use cases. Remaining (optional): the fully-autonomous NL→execute→report loop |
 | G9 | **Time-travel (temporal) queries** — point-in-time as-of, current-state, and year-over-year diff over the 10 fiscal years | Numeric `validFrom`/`validTo` on `relations` + an MDI temporal index; as-of / current / diff queries return correct rows and are index-backed (MDI for unbounded, persistent composite for node-anchored — verified §4.8); built in `FinReflectKgTemporal` | **Done** — `FinReflectKgTemporal` (OneShard) built & validated: 17.51 M edges carry `validFrom`/`validTo`, as-of is MDI-backed (verified via `explain`), AAPL `operates_in` as-of 48/76/85 (2014/18/24) ([build_temporal.sh](../scripts/build_temporal.sh), [validate_temporal.py](../scripts/validate_temporal.py)) |
-| G10 | **BYOC packaging of the demo UI** — run the G9-P5 visualizer as an ArangoDB platform service rather than on a laptop | A service on port 8000 at the root path, shipped as either a container image or a ServiceMaker code package, all browser-facing URLs relative so the `/_service/uds/_global/<app>/` prefix survives | **IMPLEMENTED** — [deploy/Dockerfile](../deploy/Dockerfile), [deploy/service_main.py](../deploy/service_main.py), [deploy/build.sh](../deploy/build.sh), [deploy/package.sh](../deploy/package.sh); relative URLs at [demo/static/app.js:16-40](../demo/static/app.js#L16-L40). Deployed and serving live 2026-08-26. Five paths verified — see §4.9 |
+| G10 | **BYOC packaging of the demo UI** — run the G9-P5 visualizer as an ArangoDB platform service rather than on a laptop | A flat ServiceMaker bundle on `py12base`, mounted at `/_service/uds/_db/<db>/<instance>/`, with the prefix stripped server-side and relative URLs client-side | **DEPLOYED & VERIFIED** 2026-09-26 — live at `/_service/uds/_db/FinReflectKgTemporal/finreflect/` (service `arango-user-defined-iu37r`, v1.0.0-1). [deploy/entrypoint](../deploy/entrypoint), [deploy/package.sh](../deploy/package.sh), [scripts/byoc_deploy.py](../scripts/byoc_deploy.py), [demo/prefix.py](../demo/prefix.py). See §4.9 |
 
 ### Non-goals (this phase)
 
@@ -823,10 +840,12 @@ locally") cannot be followed literally because that file is not in the public re
 not needed; and **`py12base` does not ship `uv` at all**, which is a second reason to stay on
 3.13.
 
-**Routing strips the prefix.** The chart's `ArangoRoute` publishes the service at
-`/_service/uds/_global/<app>/` with a destination `path: "/"` — so envoy rewrites
-`/_service/uds/_global/finreflect/api/timeline` to `/api/timeline` before it reaches the service.
-The service sees clean root-relative paths; **the browser does not**. Any absolute asset or
+**Routing forwards the prefix intact — CORRECTED 2026-09-26.** The service is published at
+`/_service/uds/_db/<db>/<instance>/` and the request arrives with that prefix still on it.
+The earlier claim that envoy rewrites it away was wrong. The app strips it itself
+([demo/prefix.py](../demo/prefix.py)), the Starlette way: append to `root_path`, never shorten
+`path` — shortening breaks `StaticFiles` on Starlette >= 0.33. **The browser half is separate
+and also required.** Any absolute asset or
 API URL in the frontend (`/app.js`, `/api/…`) resolves to the domain root, misses the
 prefix, and 404s. **All frontend URLs must be relative.**
 
@@ -935,6 +954,38 @@ which every container deployment requires. `.env` is now optional, and an unset 
 the process at import. Quoted values from `docker run --env-file` are also stripped now, since
 `--env-file` (unlike python-dotenv) preserves quotes and the symptom is a 401 pointing nowhere
 near the cause.
+
+**DEPLOYED 2026-09-26.** Live at
+`https://prod.demo.pilot.arango.ai/_service/uds/_db/FinReflectKgTemporal/finreflect/`
+(service `arango-user-defined-iu37r`, package `finreflectkg-timetravel` v1.0.0-1, base image
+`py12base`). Deploy, roll back or remove it with
+[scripts/byoc_deploy.py](../scripts/byoc_deploy.py):
+
+```
+./deploy/package.sh 1.0.0 --with-env          # flat bundle, credentials baked (SECRET)
+.venv311/bin/python scripts/byoc_deploy.py update     # pre-flight, upload, swap, verify
+```
+
+Verified on the live URL, not just by the deploy script's own client: 743 companies; anchors
+2014/2019/2020/2024; aapl-2020 depth-1 → 125 nodes / 140 edges; msft-2024 depth-2 → 146 / 197;
+aapl 2019→2024 diff → 40 appeared / 40 disappeared; `style.css`, `app.js` and
+`vendor/cytoscape.min.js` all served under the prefix.
+
+**Why this took two attempts.** The August work was never tested against the platform — only
+against a hand-run container — so it encoded the container-image contract instead of the package
+one. Three assumptions were wrong (flat vs wrapped, `py12base` vs `py13base`, prefix forwarded vs
+stripped), and the repo had no deploy script at all while five sibling projects did. The fix was
+to read what actually works: `project-sentinel`, `gdelt-market-impact`,
+`agentic-graph-analytics`, `arango-ontoextract` and `multihop-eval` are all deployed on this
+cluster, all on `py12base`, all flat, all stripping the prefix in-app.
+
+**The mount database must exist.** The `<db>` segment comes from what the app reads
+(`FinReflectKgTemporal`, hardcoded in [demo/api.py](../demo/api.py)), deliberately not from the
+repo's `ARANGO_DATABASE` — which reads `FinReflectKG`, a database that does not exist on
+prod.demo after the migration and would mount the service at a dead path.
+
+**Expect a ~60s 404 window** after the service reports DEPLOYED while the pod installs its
+dependencies. Poll rather than concluding failure.
 
 **Applies to more than this repo.** `gdelt-market-impact`'s what-if UI is the same shape
 (FastAPI + vendored Cytoscape over ArangoDB) and already binds **port 8000** at the root
