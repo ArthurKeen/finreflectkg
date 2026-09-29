@@ -1,29 +1,37 @@
-/* Arango palette, adopted verbatim from r2g (src/r2g/ui/static/index.html).
-   Light is the default; dark is opt-in via <html data-theme="dark">, toggled
-   from the header and persisted in localStorage. Both palettes drive the same
-   custom properties, so the rest of this sheet is theme-agnostic. */
+/* Arango platform palette. Sampled from the platform itself, not eyeballed: the
+   shell's own bundle declares `Inter, sans-serif` and its neutrals are PURE greys
+   (#f5f5f5, #e0e0e0, #a0a0a0, #333338, #000000) with the brand green #006532. The
+   previous palette was Tailwind slate (#0f172a / #1e293b / #475569), which is
+   blue-tinted — that is why dark mode read as navy against the platform's black
+   chrome, and why the sky-blue control accents looked foreign.
+
+   Light is the default; dark is opt-in via <html data-theme="dark">, toggled from
+   the header and persisted in localStorage. Both palettes drive the same custom
+   properties, so the rest of this sheet is theme-agnostic. */
 :root {
   color-scheme: light;
-  --bg: #f1f5f9; --surface: #ffffff; --surface2: #e9eef5;
-  --border: #cbd5e1; --text: #1e293b; --text-muted: #64748b;
-  --accent: #0284c7; --accent2: #6366f1;
+  --bg: #f5f5f5; --surface: #ffffff; --surface2: #f0f0f0;
+  --border: #dcdcdc; --text: #1a1a1a; --text-muted: #5a5a5a;
+  /* Arango brand green, the platform's own accent — not a generic blue. Drives the
+     sliders (accent-color), the as-of year readout and the section headings. */
+  --accent: #006532; --accent2: #4a7c59;
   --green: #2fa86b;
   --arango-green: #006532; --arango-green-hover: #005329;
   --yellow: #b45309; --red: #da1a20; --pink: #db2777;
 
   /* Graph canvas + marks — read by app.js so cytoscape follows the theme. */
-  --canvas-tint: #e6ecf5;
-  --graph-label: #334155;
+  --canvas-tint: #f0f0f0;
+  --graph-label: #333333;
   /* Stepped away from the default grey node (#8a97ad) so a grey node never
      reads as a thickening of its own edge. */
-  --graph-edge: #b8c4d4;
-  --graph-edge-label: #64748b;
+  --graph-edge: #c4c4c4;
+  --graph-edge-label: #787878;
   --graph-company-fill: #ffffff;
-  --graph-company-label: #1e293b;
+  --graph-company-label: #1a1a1a;
   /* Ring drawn around every node so the mark separates from edges, arrowheads
      and neighbouring labels regardless of its own hue. */
   --graph-node-ring: #ffffff;
-  --legend-bg: rgba(255, 255, 255, .88);
+  --legend-bg: rgba(255, 255, 255, .9);
 
   /* Aliases: the original token names this sheet was written against. */
   --panel: var(--surface); --panel2: var(--surface2);
@@ -32,27 +40,31 @@
 }
 html[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #0f172a; --surface: #1e293b; --surface2: #334155;
-  --border: #475569; --text: #e2e8f0; --text-muted: #94a3b8;
-  --accent: #38bdf8; --accent2: #818cf8;
-  --green: #2fa86b;
+  /* Neutral near-black, matching the platform's #000000 chrome. Any blue here reads
+     as a mismatch the moment the app sits beside the platform sidebar. */
+  --bg: #0d0d0d; --surface: #1a1a1a; --surface2: #262626;
+  --border: #333338; --text: #e0e0e0; --text-muted: #a0a0a0;
+  /* #006532 is unreadable on near-black; this is the lighter brand green the
+     platform logo itself uses in dark mode. */
+  --accent: #7cb64f; --accent2: #a0ca4c;
+  --green: #4caf72;
   --arango-green: #006532; --arango-green-hover: #005329;
-  --yellow: #fbbf24; --red: #da1a20; --pink: #f472b6;
+  --yellow: #d9a441; --red: #e5484d; --pink: #d6609b;
 
-  --canvas-tint: #131a29;
-  --graph-label: #cfd8e6;
-  --graph-edge: #3a4a68;
-  --graph-edge-label: #576a82;
+  --canvas-tint: #141414;
+  --graph-label: #d4d4d4;
+  --graph-edge: #3a3a3a;
+  --graph-edge-label: #808080;
   --graph-company-fill: #ffffff;
   --graph-company-label: #ffffff;
-  --graph-node-ring: #0f172a;
-  --legend-bg: rgba(30, 41, 59, .88);
+  --graph-node-ring: #0d0d0d;
+  --legend-bg: rgba(26, 26, 26, .9);
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body {
   background: var(--bg); color: var(--ink); height: 100vh; display: flex; flex-direction: column;
-  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font: 14px/1.45 Inter, sans-serif;
 }
 header {
   display: flex; align-items: center; gap: 20px; padding: 10px 18px;

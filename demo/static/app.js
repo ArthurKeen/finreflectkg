@@ -59,10 +59,10 @@ const cssVar = (name, fallback) => {
 };
 
 function graphStyle() {
-  const label = cssVar('--graph-label', '#cfd8e6');
-  const edge = cssVar('--graph-edge', '#31405c');
-  const edgeLabel = cssVar('--graph-edge-label', '#576a82');
-  const accent = cssVar('--accent', '#5b8def');
+  const label = cssVar('--graph-label', '#333333');
+  const edge = cssVar('--graph-edge', '#c4c4c4');
+  const edgeLabel = cssVar('--graph-edge-label', '#787878');
+  const accent = cssVar('--accent', '#006532');
   const green = cssVar('--green', '#2fa86b');
   const red = cssVar('--red', '#e46a6a');
   return [
@@ -75,7 +75,7 @@ function graphStyle() {
       'text-valign': 'bottom', 'text-margin-y': '3px', 'min-zoomed-font-size': 6,
       // Surface-coloured ring + explicit z-index so every node reads as a distinct
       // mark above its own edge, the arrowhead, and any label behind it.
-      'border-width': 1.5, 'border-color': cssVar('--graph-node-ring', '#0f172a'),
+      'border-width': 1.5, 'border-color': cssVar('--graph-node-ring', '#ffffff'),
       'border-opacity': 1, 'z-index': 10,
       'transition-property': 'opacity, background-color, width, height', 'transition-duration': '260ms' } },
     { selector: 'node.company', style: {
